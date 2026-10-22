@@ -199,6 +199,24 @@
   </header>
 
   <section class="panel">
+    <div id="outBar">
+      <div class="row">
+        <button type="button" id="btnOut1" class="success">出库 1</button>
+      </div>
+      <p class="hint">扫码会自动出库 1 条。要出多条：用 − / + 或直接填数量，再点「按数量出库」。</p>
+      <div class="qty-box" style="margin-top:0">
+        <button type="button" id="btnMinus" class="secondary" style="flex:0 0 56px;font-size:1.4rem">−</button>
+        <input id="qtyInput" type="number" min="1" step="1" value="1" inputmode="numeric" />
+        <button type="button" id="btnPlus" class="secondary" style="flex:0 0 56px;font-size:1.4rem">+</button>
+        <button type="button" id="btnOutQty" class="accent">按数量出库</button>
+      </div>
+      <p class="hint" id="outSkuHint" style="margin-top:8px">先扫码或查询 SKU，再出库。</p>
+      <label style="margin-top:10px">备注（可选）</label>
+      <input id="noteInput" type="text" placeholder="例如：门店取货 / 快递出库" />
+      <p class="hint" id="lastOrder"></p>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--line);margin:14px 0" />
+
     <!-- 飞书内：大按钮调原生扫一扫 -->
     <div id="feishuScanBox" class="hidden">
       <button type="button" id="btnFeishuScan" class="feishu-scan">扫码出库</button>
@@ -245,19 +263,6 @@
       <div class="kv"><div class="k">单位</div><div class="v" id="skuUnit">条</div></div>
     </div>
 
-    <div class="row" style="margin-top:14px">
-      <button type="button" id="btnOut1" class="success">出库 1</button>
-    </div>
-    <p class="hint">扫码会自动出库 1 条。要出多条：用 − / + 或直接填数量，再点「按数量出库」。</p>
-    <div class="qty-box">
-      <button type="button" id="btnMinus" class="secondary" style="flex:0 0 56px;font-size:1.4rem">−</button>
-      <input id="qtyInput" type="number" min="1" step="1" value="1" inputmode="numeric" />
-      <button type="button" id="btnPlus" class="secondary" style="flex:0 0 56px;font-size:1.4rem">+</button>
-      <button type="button" id="btnOutQty" class="accent">按数量出库</button>
-    </div>
-    <label style="margin-top:10px">备注（可选）</label>
-    <input id="noteInput" type="text" placeholder="例如：门店取货 / 快递出库" />
-    <p class="hint" id="lastOrder"></p>
   </section>
 
   <div id="toast" class="toast"></div>
@@ -330,6 +335,8 @@
       st.textContent = sku.status || "正常";
       st.className = "status " + statusClass(sku.status);
       $("manualSku").value = sku.sku;
+      const hint = $("outSkuHint");
+      if (hint) hint.textContent = "当前：" + sku.sku + " · 库存 " + sku.current + " " + (sku.unit || "条");
     }
 
     async function api(path, opts) {
@@ -369,6 +376,8 @@
       } catch (e) {
         currentSku = null;
         $("card").classList.add("hidden");
+        const hint = $("outSkuHint");
+        if (hint) hint.textContent = "先扫码或查询 SKU，再出库。";
         toast(e.message || "查询失败", true);
         beep(false);
         return false;
