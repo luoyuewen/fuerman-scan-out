@@ -248,8 +248,11 @@
     <div class="row" style="margin-top:14px">
       <button type="button" id="btnOut1" class="success">出库 1</button>
     </div>
+    <p class="hint">扫码会自动出库 1 条。要出多条：用 − / + 或直接填数量，再点「按数量出库」。</p>
     <div class="qty-box">
-      <input id="qtyInput" type="number" min="1" step="1" value="10" inputmode="numeric" />
+      <button type="button" id="btnMinus" class="secondary" style="flex:0 0 56px;font-size:1.4rem">−</button>
+      <input id="qtyInput" type="number" min="1" step="1" value="1" inputmode="numeric" />
+      <button type="button" id="btnPlus" class="secondary" style="flex:0 0 56px;font-size:1.4rem">+</button>
       <button type="button" id="btnOutQty" class="accent">按数量出库</button>
     </div>
     <label style="margin-top:10px">备注（可选）</label>
@@ -276,6 +279,27 @@
       if (typeof window.h5sdk === "object" && window.h5sdk) return true;
       return false;
     }
+
+    let audioCtx = null;
+    function beep(ok) {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        const tones = ok ? [[1046, 0, 0.12], [1568, 0.13, 0.16]] : [[330, 0, 0.18], [220, 0.2, 0.3]];
+        tones.forEach(([f, start, dur]) => {
+          const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+          o.type = ok ? "sine" : "square"; o.frequency.value = f;
+          const t = audioCtx.currentTime + start;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(0.5, t + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+          o.connect(g); g.connect(audioCtx.destination); o.start(t); o.stop(t + dur + 0.02);
+        });
+      } catch (_) {}
+      if (navigator.vibrate) navigator.vibrate(ok ? 60 : [120, 80, 120]);
+    }
+    // 首次触摸解锁 iOS 音频
+    document.addEventListener("touchstart", () => { try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (_) {} }, { once: true });
 
     function toast(msg, isErr) {
       const el = $("toast");
@@ -322,7 +346,7 @@
       return data;
     }
 
-    async function lookup(code) {
+    async function lookup(code, silent) {
       code = (code || "").trim();
       if (!code) { toast("请输入或扫描 SKU", true); return; }
       // 若二维码是完整 URL，尝试取末段或 query 中的 sku
@@ -340,11 +364,14 @@
       try {
         const data = await api("/api/sku/" + encodeURIComponent(code));
         renderSku(data.sku);
-        toast("已找到 " + data.sku.sku);
+        if (!silent) toast("已找到 " + data.sku.sku);
+        return true;
       } catch (e) {
         currentSku = null;
         $("card").classList.add("hidden");
         toast(e.message || "查询失败", true);
+        beep(false);
+        return false;
       }
     }
 
@@ -362,10 +389,12 @@
         });
         renderSku(data.sku);
         $("lastOrder").textContent = "最近出库单：" + data.order_no + " × " + data.qty;
-        toast(data.message || "出库成功");
-        if (navigator.vibrate) navigator.vibrate(40);
+        toast((data.message || "出库成功") + "，剩余 " + data.sku.current);
+        beep(true);
+        $("qtyInput").value = 1;
       } catch (e) {
         toast(e.message || "出库失败", true);
+        beep(false);
       } finally {
         $("btnOut1").disabled = false;
         $("btnOutQty").disabled = false;
@@ -379,7 +408,7 @@
       if (code === lastScanCode && now - lastScanAt < 2500) return;
       lastScanCode = code;
       lastScanAt = now;
-      lookup(code);
+      lookup(code, true).then((ok) => { if (ok) outbound(1); });
     }
 
     // ---------- 飞书 JSAPI ----------
@@ -552,6 +581,8 @@
     });
     $("btnOut1").onclick = () => outbound(1);
     $("btnOutQty").onclick = () => outbound($("qtyInput").value);
+    $("btnMinus").onclick = () => { const v = Math.max(1, (parseInt($("qtyInput").value, 10) || 1) - 1); $("qtyInput").value = v; };
+    $("btnPlus").onclick = () => { const v = (parseInt($("qtyInput").value, 10) || 0) + 1; $("qtyInput").value = v; };
 
     boot();
   </script>
