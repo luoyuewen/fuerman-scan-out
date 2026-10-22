@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: fuerman-scan-out
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DEMO
+        value: "0"
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: FEISHU_APP_ID
+        sync: false
+      - key: FEISHU_APP_SECRET
+        sync: false
+      - key: FEISHU_APP_TOKEN
+        value: JWzPburUbalqVXs4ugkclgzhnce
+      - key: FEISHU_TABLE_SKU
+        sync: false
+      - key: FEISHU_TABLE_OUT
+        sync: false

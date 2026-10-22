@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <title>富尔曼 · 扫码出库</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://lf1-cdn-tos.bytegoofy.com/goofy/lark/op/h5-js-sdk-1.5.16.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --line: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --btn: #2563eb;
+      --btn2: #0ea5e9;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100dvh;
+      padding: 12px;
+      padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-size: 1.15rem;
+      margin: 0;
+      font-weight: 700;
+    }
+    .badge {
+      font-size: 0.7rem;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #334155;
+      color: var(--muted);
+    }
+    .badge.demo { background: #422006; color: #fbbf24; }
+    .badge.feishu { background: #1e3a5f; color: #7dd3fc; }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    #reader {
+      width: 100%;
+      overflow: hidden;
+      border-radius: 12px;
+      background: #000;
+      min-height: 220px;
+    }
+    #reader video { border-radius: 12px; }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    button, .btn {
+      appearance: none;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      color: #fff;
+      background: var(--btn);
+      flex: 1;
+      min-height: 48px;
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.secondary { background: #475569; }
+    button.accent { background: var(--btn2); }
+    button.danger { background: var(--bad); }
+    button.success { background: var(--ok); }
+    button.feishu-scan {
+      background: linear-gradient(135deg, #2563eb, #0ea5e9);
+      font-size: 1.15rem;
+      min-height: 56px;
+      letter-spacing: 0.02em;
+    }
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #0b1220;
+      color: var(--text);
+      font-size: 1rem;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+    .manual { display: flex; gap: 8px; margin-top: 8px; }
+    .manual input { flex: 1; }
+    .manual button { flex: 0 0 auto; min-width: 88px; }
+    .sku-title {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin: 0 0 4px;
+    }
+    .sku-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--accent);
+      font-size: 0.95rem;
+      margin-bottom: 10px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .kv {
+      background: #0b1220;
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .kv .k { font-size: 0.72rem; color: var(--muted); }
+    .kv .v { font-size: 1.05rem; font-weight: 600; margin-top: 2px; word-break: break-all; }
+    .stock-big {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px;
+      background: linear-gradient(135deg, #0b1220, #172554);
+      border-radius: 12px;
+      border: 1px solid #1d4ed8;
+    }
+    .stock-big .num {
+      font-size: 2.4rem;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .status {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+    .status.正常 { background: #14532d; color: #86efac; }
+    .status.预警 { background: #78350f; color: #fcd34d; }
+    .status.缺货 { background: #7f1d1d; color: #fca5a5; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 24px;
+      transform: translateX(-50%) translateY(120%);
+      background: #022c22;
+      color: #a7f3d0;
+      border: 1px solid #059669;
+      padding: 12px 16px;
+      border-radius: 12px;
+      max-width: 90vw;
+      transition: transform 0.25s ease;
+      z-index: 50;
+      font-weight: 600;
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+    .toast.err { background: #450a0a; color: #fecaca; border-color: #dc2626; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 8px; line-height: 1.4; }
+    .demo-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .chip {
+      font-size: 0.75rem;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: #0b1220;
+      border: 1px solid var(--line);
+      color: var(--accent);
+      cursor: pointer;
+      font-family: ui-monospace, Menlo, monospace;
+    }
+    .hidden { display: none !important; }
+    .qty-box { display: flex; gap: 8px; align-items: stretch; margin-top: 10px; }
+    .qty-box input { width: 100px; flex: 0 0 100px; text-align: center; font-size: 1.2rem; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>富尔曼 · 扫码出库</h1>
+    <span id="modeBadge" class="badge">连接中…</span>
+  </header>
+
+  <section class="panel">
+    <!-- 飞书内：大按钮调原生扫一扫 -->
+    <div id="feishuScanBox" class="hidden">
+      <button type="button" id="btnFeishuScan" class="feishu-scan">扫码出库</button>
+      <p class="hint">在飞书内打开本页，点上方按钮调用飞书「扫一扫」。扫到的内容应为 SKU 编码。</p>
+    </div>
+
+    <!-- 浏览器兜底：html5-qrcode 相机 -->
+    <div id="browserScanBox">
+      <div id="reader"></div>
+      <div class="row">
+        <button type="button" id="btnStart" class="accent">打开相机扫码</button>
+        <button type="button" id="btnStop" class="secondary hidden">停止扫码</button>
+      </div>
+      <p class="hint" id="browserHint">手机浏览器需 HTTPS 才能开相机；建议在飞书工作台打开本应用。</p>
+    </div>
+
+    <div class="manual">
+      <input id="manualSku" type="text" placeholder="或手动输入 SKU，如 FM-NYL-20-BK" autocomplete="off" autocapitalize="characters" />
+      <button type="button" id="btnLookup" class="secondary">查询</button>
+    </div>
+    <p class="hint">大批量出库请用手输数量，不要连扫十几次。</p>
+    <div id="demoChips" class="demo-list hidden"></div>
+  </section>
+
+  <section id="card" class="panel hidden">
+    <p class="sku-title" id="skuName">—</p>
+    <div class="sku-code" id="skuCode">—</div>
+    <div class="grid">
+      <div class="stock-big">
+        <div>
+          <div class="k" style="color:var(--muted);font-size:0.75rem">当前库存</div>
+          <div class="num" id="skuCurrent">0</div>
+        </div>
+        <div style="text-align:right">
+          <div id="skuStatus" class="status 正常">正常</div>
+          <div style="margin-top:8px;font-size:0.8rem;color:var(--muted)">
+            安全库存 <span id="skuSafety">0</span>
+          </div>
+        </div>
+      </div>
+      <div class="kv"><div class="k">规格/颜色</div><div class="v" id="skuSpec">—</div></div>
+      <div class="kv"><div class="k">尺寸</div><div class="v" id="skuSize">—</div></div>
+      <div class="kv"><div class="k">材质</div><div class="v" id="skuMaterial">—</div></div>
+      <div class="kv"><div class="k">单位</div><div class="v" id="skuUnit">条</div></div>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <button type="button" id="btnOut1" class="success">出库 1</button>
+    </div>
+    <div class="qty-box">
+      <input id="qtyInput" type="number" min="1" step="1" value="10" inputmode="numeric" />
+      <button type="button" id="btnOutQty" class="accent">按数量出库</button>
+    </div>
+    <label style="margin-top:10px">备注（可选）</label>
+    <input id="noteInput" type="text" placeholder="例如：门店取货 / 快递出库" />
+    <p class="hint" id="lastOrder"></p>
+  </section>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let currentSku = null;
+    let scanning = false;
+    let html5QrCode = null;
+    let lastScanAt = 0;
+    let lastScanCode = "";
+    let feishuReady = false;
+    let feishuConfigPromise = null;
+
+    function isFeishuEnv() {
+      const ua = navigator.userAgent || "";
+      if (/Feishu|Lark|LarkLocale|LarkApp/i.test(ua)) return true;
+      if (typeof window.tt === "object" && window.tt && typeof window.tt.scanCode === "function") return true;
+      if (typeof window.h5sdk === "object" && window.h5sdk) return true;
+      return false;
+    }
+
+    function toast(msg, isErr) {
+      const el = $("toast");
+      el.textContent = msg;
+      el.classList.toggle("err", !!isErr);
+      el.classList.add("show");
+      clearTimeout(el._t);
+      el._t = setTimeout(() => el.classList.remove("show"), 2600);
+    }
+
+    function statusClass(s) {
+      if (s === "缺货" || s === "预警" || s === "正常") return s;
+      return "正常";
+    }
+
+    function renderSku(sku) {
+      currentSku = sku;
+      $("card").classList.remove("hidden");
+      $("skuName").textContent = sku.name || "（无名称）";
+      $("skuCode").textContent = sku.sku;
+      $("skuCurrent").textContent = sku.current;
+      $("skuSafety").textContent = sku.safety;
+      $("skuSpec").textContent = sku.spec || "—";
+      $("skuSize").textContent = sku.size || "—";
+      $("skuMaterial").textContent = sku.material || "—";
+      $("skuUnit").textContent = sku.unit || "条";
+      const st = $("skuStatus");
+      st.textContent = sku.status || "正常";
+      st.className = "status " + statusClass(sku.status);
+      $("manualSku").value = sku.sku;
+    }
+
+    async function api(path, opts) {
+      const res = await fetch(path, {
+        headers: { "Content-Type": "application/json", ...(opts && opts.headers || {}) },
+        ...opts,
+      });
+      let data;
+      try { data = await res.json(); } catch (_) { data = { detail: "服务器无响应" }; }
+      if (!res.ok) {
+        const detail = data.detail || data.message || ("HTTP " + res.status);
+        throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+      }
+      return data;
+    }
+
+    async function lookup(code) {
+      code = (code || "").trim();
+      if (!code) { toast("请输入或扫描 SKU", true); return; }
+      // 若二维码是完整 URL，尝试取末段或 query 中的 sku
+      try {
+        if (/^https?:\/\//i.test(code)) {
+          const u = new URL(code);
+          const q = u.searchParams.get("sku") || u.searchParams.get("code");
+          if (q) code = q;
+          else {
+            const parts = u.pathname.split("/").filter(Boolean);
+            if (parts.length) code = decodeURIComponent(parts[parts.length - 1]);
+          }
+        }
+      } catch (_) {}
+      try {
+        const data = await api("/api/sku/" + encodeURIComponent(code));
+        renderSku(data.sku);
+        toast("已找到 " + data.sku.sku);
+      } catch (e) {
+        currentSku = null;
+        $("card").classList.add("hidden");
+        toast(e.message || "查询失败", true);
+      }
+    }
+
+    async function outbound(qty) {
+      if (!currentSku) { toast("请先扫码或查询 SKU", true); return; }
+      qty = parseInt(qty, 10);
+      if (!qty || qty < 1) { toast("数量至少为 1", true); return; }
+      const note = $("noteInput").value.trim();
+      try {
+        $("btnOut1").disabled = true;
+        $("btnOutQty").disabled = true;
+        const data = await api("/api/outbound", {
+          method: "POST",
+          body: JSON.stringify({ sku: currentSku.sku, qty, note: note || undefined }),
+        });
+        renderSku(data.sku);
+        $("lastOrder").textContent = "最近出库单：" + data.order_no + " × " + data.qty;
+        toast(data.message || "出库成功");
+        if (navigator.vibrate) navigator.vibrate(40);
+      } catch (e) {
+        toast(e.message || "出库失败", true);
+      } finally {
+        $("btnOut1").disabled = false;
+        $("btnOutQty").disabled = false;
+      }
+    }
+
+    function onScanSuccess(decodedText) {
+      const now = Date.now();
+      const code = (decodedText || "").trim();
+      if (!code) return;
+      if (code === lastScanCode && now - lastScanAt < 2500) return;
+      lastScanCode = code;
+      lastScanAt = now;
+      lookup(code);
+    }
+
+    // ---------- 飞书 JSAPI ----------
+    function ensureFeishuConfig() {
+      if (feishuReady) return Promise.resolve();
+      if (feishuConfigPromise) return feishuConfigPromise;
+      feishuConfigPromise = (async () => {
+        if (!window.h5sdk || typeof window.h5sdk.config !== "function") {
+          throw new Error("飞书 H5 SDK 未加载，请在飞书内打开或刷新页面");
+        }
+        const pageUrl = location.href.split("#")[0];
+        const cfg = await api(
+          "/api/feishu/jsapi-config?url=" + encodeURIComponent(pageUrl)
+        );
+        await new Promise((resolve, reject) => {
+          window.h5sdk.error((err) => {
+            reject(new Error((err && (err.errMsg || err.errorMessage)) || "飞书 SDK 鉴权失败"));
+          });
+          window.h5sdk.config({
+            appId: cfg.appId,
+            timestamp: cfg.timestamp,
+            nonceStr: cfg.nonceStr,
+            signature: cfg.signature,
+            jsApiList: ["scanCode"],
+            onSuccess: () => {
+              window.h5sdk.ready(() => {
+                feishuReady = true;
+                resolve();
+              });
+            },
+            onFail: (err) => {
+              reject(new Error((err && (err.errMsg || err.errorMessage || err.errno)) || "config 失败"));
+            },
+          });
+          // 部分版本只走 ready，不回调 onSuccess
+          setTimeout(() => {
+            if (!feishuReady && window.tt && typeof window.tt.scanCode === "function") {
+              // 再等 ready
+              try {
+                window.h5sdk.ready(() => {
+                  feishuReady = true;
+                  resolve();
+                });
+              } catch (_) {}
+            }
+          }, 800);
+        });
+      })().catch((e) => {
+        feishuConfigPromise = null;
+        throw e;
+      });
+      return feishuConfigPromise;
+    }
+
+    async function feishuScan() {
+      try {
+        $("btnFeishuScan").disabled = true;
+        await ensureFeishuConfig();
+        if (!window.tt || typeof window.tt.scanCode !== "function") {
+          throw new Error("当前飞书版本不支持扫码，请升级飞书或用手输 SKU");
+        }
+        window.tt.scanCode({
+          scanType: ["qrCode", "barCode"],
+          barCodeInput: true,
+          success: (res) => {
+            const code = (res && res.result) || "";
+            onScanSuccess(code);
+          },
+          fail: (err) => {
+            const msg = (err && (err.errMsg || err.errorMessage)) || "扫码取消或失败";
+            if (!/cancel/i.test(String(msg))) toast(msg, true);
+          },
+          complete: () => {
+            $("btnFeishuScan").disabled = false;
+          },
+        });
+      } catch (e) {
+        $("btnFeishuScan").disabled = false;
+        toast(e.message || "无法启动飞书扫码", true);
+      }
+    }
+
+    // ---------- 浏览器相机兜底 ----------
+    async function startScan() {
+      if (scanning) return;
+      if (!window.Html5Qrcode) {
+        toast("扫码库加载失败，请用手动输入", true);
+        return;
+      }
+      try {
+        html5QrCode = new Html5Qrcode("reader");
+        const cameras = await Html5Qrcode.getCameras();
+        let camId = null;
+        if (cameras && cameras.length) {
+          const back = cameras.find(c => /back|rear|环境|后/i.test(c.label));
+          camId = (back || cameras[cameras.length - 1]).id;
+        }
+        const config = { fps: 8, qrbox: { width: 240, height: 240 }, aspectRatio: 1.0 };
+        if (camId) {
+          await html5QrCode.start(camId, config, onScanSuccess, () => {});
+        } else {
+          await html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, () => {});
+        }
+        scanning = true;
+        $("btnStart").classList.add("hidden");
+        $("btnStop").classList.remove("hidden");
+      } catch (e) {
+        toast("无法打开相机：" + (e.message || e) + "。请改用手动输入，或在飞书内打开。", true);
+      }
+    }
+
+    async function stopScan() {
+      if (!html5QrCode || !scanning) return;
+      try { await html5QrCode.stop(); await html5QrCode.clear(); } catch (_) {}
+      scanning = false;
+      $("btnStop").classList.add("hidden");
+      $("btnStart").classList.remove("hidden");
+    }
+
+    function setupScanUi() {
+      const inFeishu = isFeishuEnv();
+      if (inFeishu) {
+        $("feishuScanBox").classList.remove("hidden");
+        $("browserScanBox").classList.add("hidden");
+        // 预鉴权，减少第一次扫码等待
+        ensureFeishuConfig().catch(() => {});
+      } else {
+        $("feishuScanBox").classList.add("hidden");
+        $("browserScanBox").classList.remove("hidden");
+      }
+    }
+
+    async function boot() {
+      setupScanUi();
+      try {
+        const h = await api("/api/health");
+        const badge = $("modeBadge");
+        if (h.demo) {
+          badge.textContent = "演示模式";
+          badge.classList.add("demo");
+          const list = await api("/api/demo/skus");
+          const box = $("demoChips");
+          box.classList.remove("hidden");
+          box.innerHTML = "";
+          (list.items || []).forEach((it) => {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "chip";
+            chip.textContent = it.sku;
+            chip.onclick = () => lookup(it.sku);
+            box.appendChild(chip);
+          });
+        } else {
+          badge.textContent = isFeishuEnv() ? "飞书 · 正式" : "飞书正式";
+          badge.classList.remove("demo");
+          if (isFeishuEnv()) badge.classList.add("feishu");
+        }
+      } catch (e) {
+        $("modeBadge").textContent = "后端离线";
+        toast("后端未启动或不可达", true);
+      }
+    }
+
+    $("btnFeishuScan").onclick = feishuScan;
+    $("btnStart").onclick = startScan;
+    $("btnStop").onclick = stopScan;
+    $("btnLookup").onclick = () => lookup($("manualSku").value);
+    $("manualSku").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") lookup($("manualSku").value);
+    });
+    $("btnOut1").onclick = () => outbound(1);
+    $("btnOutQty").onclick = () => outbound($("qtyInput").value);
+
+    boot();
+  </script>
+</body>
+</html>
