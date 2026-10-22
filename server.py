@@ -484,6 +484,39 @@ async def http_exc_handler(request, exc: HTTPException):
     )
 
 
+@app.get("/manifest.webmanifest")
+async def web_manifest():
+    return FileResponse(
+        ROOT / "manifest.webmanifest",
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/sw.js")
+async def service_worker():
+    return FileResponse(
+        ROOT / "sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/icon-192.png")
+async def icon_192():
+    return FileResponse(ROOT / "icon-192.png", media_type="image/png")
+
+
+@app.get("/icon-512.png")
+async def icon_512():
+    return FileResponse(ROOT / "icon-512.png", media_type="image/png")
+
+
+@app.get("/apple-touch-icon.png")
+async def apple_touch_icon():
+    return FileResponse(ROOT / "apple-touch-icon.png", media_type="image/png")
+
+
 @app.get("/")
 async def index():
     return FileResponse(ROOT / "index.html")

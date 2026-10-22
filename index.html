@@ -3,7 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#0f172a" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="扫码出库" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
   <title>富尔曼 · 扫码出库</title>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://lf1-cdn-tos.bytegoofy.com/goofy/lark/op/h5-js-sdk-1.5.16.js"></script>
@@ -189,10 +196,31 @@
     }
     .hidden { display: none !important; }
     .qty-box { display: flex; gap: 8px; align-items: stretch; margin-top: 10px; }
+    .install-banner {
+      display: none;
+      margin-bottom: 12px;
+      padding: 12px;
+      border-radius: 12px;
+      background: #12263f;
+      border: 1px solid #1d4ed8;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .install-banner.show { display: flex; }
+    .install-banner p { margin: 0; flex: 1; font-size: 0.9rem; line-height: 1.45; color: #e2e8f0; }
+    .install-banner .actions { display: flex; flex-direction: column; gap: 6px; min-width: 96px; }
+    .install-banner button { min-height: 36px; font-size: 0.85rem; padding: 8px 10px; }
     .qty-box input { width: 100px; flex: 0 0 100px; text-align: center; font-size: 1.2rem; font-weight: 700; }
   </style>
 </head>
 <body>
+  <div id="installBanner" class="install-banner">
+    <p id="installText">把「扫码出库」加到手机桌面，下次点图标就能直接扫。</p>
+    <div class="actions">
+      <button type="button" id="btnInstall" class="accent">添加到桌面</button>
+      <button type="button" id="btnInstallLater" class="secondary">稍后</button>
+    </div>
+  </div>
   <header>
     <h1>富尔曼 · 扫码出库</h1>
     <span id="modeBadge" class="badge">连接中…</span>
@@ -592,6 +620,67 @@
     $("btnOutQty").onclick = () => outbound($("qtyInput").value);
     $("btnMinus").onclick = () => { const v = Math.max(1, (parseInt($("qtyInput").value, 10) || 1) - 1); $("qtyInput").value = v; };
     $("btnPlus").onclick = () => { const v = (parseInt($("qtyInput").value, 10) || 0) + 1; $("qtyInput").value = v; };
+    // ---------- 桌面图标 / PWA ----------
+    let deferredPrompt = null;
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches
+      || window.navigator.standalone === true;
+    const dismissKey = "fuerman_pwa_dismiss";
+
+    function showInstallBanner(mode) {
+      if (isStandalone) return;
+      if (localStorage.getItem(dismissKey) === "1" && mode !== "force") return;
+      const banner = $("installBanner");
+      const text = $("installText");
+      const btn = $("btnInstall");
+      if (!banner) return;
+      if (mode === "ios") {
+        text.textContent = "iPhone：点底部分享按钮，再选「添加到主屏幕」。加完后桌面会有「扫码出库」图标。";
+        btn.textContent = "我知道了";
+      } else if (mode === "android") {
+        text.textContent = "安卓：点「添加到桌面」，确认后桌面会有「扫码出库」图标，点开就能扫。";
+        btn.textContent = "添加到桌面";
+      } else {
+        text.textContent = "把本页加到手机桌面后，点图标就能直接扫码出库。";
+        btn.textContent = "查看方法";
+      }
+      banner.classList.add("show");
+    }
+
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      showInstallBanner("android");
+    });
+
+    $("btnInstall").onclick = async () => {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        try { await deferredPrompt.userChoice; } catch (_) {}
+        deferredPrompt = null;
+        $("installBanner").classList.remove("show");
+        return;
+      }
+      const ua = navigator.userAgent || "";
+      if (/iPhone|iPad|iPod/i.test(ua)) {
+        showInstallBanner("ios");
+        return;
+      }
+      toast("请用手机浏览器打开本页，再使用浏览器菜单里的「添加到主屏幕 / 安装应用」", false);
+    };
+    $("btnInstallLater").onclick = () => {
+      localStorage.setItem(dismissKey, "1");
+      $("installBanner").classList.remove("show");
+    };
+
+    // iOS 无 beforeinstallprompt，进页就提示一次
+    if (!isStandalone && /iPhone|iPad|iPod/i.test(navigator.userAgent || "")) {
+      setTimeout(() => showInstallBanner("ios"), 600);
+    }
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+
 
     boot();
   </script>
