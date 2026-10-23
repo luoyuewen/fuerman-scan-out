@@ -266,7 +266,7 @@
       <input id="manualSku" type="text" placeholder="扫码枪点这里再扫，或手输 SKU 后回车" autocomplete="off" autocapitalize="characters" />
       <button type="button" id="btnLookup" class="secondary">查询</button>
     </div>
-    <p class="hint" id="gunHint">电脑扫码枪：先用鼠标点一下上方输入框（框会亮起），再扫。枪自己响不等于已出库；看本页绿色成功条和「当前库存」。</p>
+    <p class="hint" id="gunHint">电脑扫码枪：先把输入法切成英文，再点一下上方输入框后扫。枪自己响不等于已出库；看页顶绿色成功条。</p>
     <p class="hint">大批量出库请用手输数量，不要连扫十几次。</p>
     <div id="demoChips" class="demo-list hidden"></div>
   </section>
@@ -383,12 +383,15 @@
       return data;
     }
 
-    async function lookup(code, silent) {
-      code = (code || "").trim();
-      if (!code) { toast("请输入或扫描 SKU", true); return; }
-      // 若二维码是完整 URL，尝试取末段或 query 中的 sku
-      try {
-        if (/^https?:\/\//i.test(code)) {
+    function normalizeSkuCode(raw) {
+      let code = (raw || "").replace(/[\u0000-\u001F\u007F\u200B-\u200D\uFEFF]/g, "").trim();
+      // 全角英数字 → 半角
+      code = code.replace(/[！-～]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+      code = code.replace(/\s+/g, "");
+      // 常见扫码枪后缀
+      code = code.replace(/[\r\n\t]+$/g, "");
+      if (/^https?:\/\//i.test(code)) {
+        try {
           const u = new URL(code);
           const q = u.searchParams.get("sku") || u.searchParams.get("code");
           if (q) code = q;
@@ -396,8 +399,17 @@
             const parts = u.pathname.split("/").filter(Boolean);
             if (parts.length) code = decodeURIComponent(parts[parts.length - 1]);
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
+      // 我们的 SKU 统一大写
+      if (/^[A-Za-z0-9._\-]+$/.test(code)) code = code.toUpperCase();
+      return code.trim();
+    }
+
+    async function lookup(code, silent) {
+      const raw = code;
+      code = normalizeSkuCode(code);
+      if (!code) { toast("请输入或扫描 SKU", true); return; }
       try {
         const data = await api("/api/sku/" + encodeURIComponent(code));
         renderSku(data.sku);
@@ -408,7 +420,9 @@
         $("card").classList.add("hidden");
         const hint = $("outSkuHint");
         if (hint) hint.textContent = "先扫码或查询 SKU，再出库。";
-        toast(e.message || "查询失败", true);
+        const shown = JSON.stringify(normalizeSkuCode(raw) || String(raw || ""));
+        toast((e.message || "查询失败") + "　扫到：" + shown, true);
+        showFlash("未找到　扫到：" + shown, true);
         beep(false);
         return false;
       }
@@ -649,35 +663,51 @@
       onScanSuccess(c, { fromGun: true });
       setTimeout(focusGunInput, 50);
     }
-    $("manualSku").addEventListener("keydown", (e) => {
-      if (e.key !== "Enter") return;
-      e.preventDefault();
-      const code = $("manualSku").value;
-      $("manualSku").value = "";
+    function appendGunChar(ch) {
+      const now = Date.now();
+      if (now - gunBufAt > 120) gunBuf = "";
+      gunBufAt = now;
+      gunBuf += ch;
+      const el = $("manualSku");
+      if (el) el.value = gunBuf;
+    }
+    function commitGunBuf() {
+      const code = gunBuf || (($("manualSku") && $("manualSku").value) || "");
+      gunBuf = "";
+      if ($("manualSku")) $("manualSku").value = "";
       fireGunScan(code);
-    });
+    }
+    // 在捕获阶段拦键盘，绕过中文输入法，避免扫码枪内容被 IME 吃掉
     document.addEventListener("keydown", (e) => {
       const tgt = e.target;
       const id = (tgt && tgt.id) || "";
       const tag = (tgt && tgt.tagName) || "";
       if (id === "noteInput" || id === "qtyInput") return;
-      if (id === "manualSku") return;
       if (tag === "TEXTAREA") return;
-      if (e.key === "Enter") {
-        if (!gunBuf) return;
-        e.preventDefault();
-        const code = gunBuf;
-        gunBuf = "";
-        fireGunScan(code);
+      if (e.isComposing || e.keyCode === 229) {
+        // 仍在输入法组字：尽量打断，提示切英文
+        if (id === "manualSku") {
+          e.preventDefault();
+          showFlash("请切换到英文输入法后再扫码枪", true);
+        }
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        if (id === "manualSku" || gunBuf) {
+          e.preventDefault();
+          commitGunBuf();
+        }
         return;
       }
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        const now = Date.now();
-        if (now - gunBufAt > 120) gunBuf = "";
-        gunBufAt = now;
-        gunBuf += e.key;
+        // 扫码枪或手动在 SKU 框：自己收字符，不交给输入法
+        if (id === "manualSku" || id === "" || tag === "BODY" || tag === "HTML" || tag === "BUTTON" || tag === "DIV") {
+          e.preventDefault();
+          appendGunChar(e.key);
+          if (id !== "manualSku") focusGunInput();
+        }
       }
-    });
+    }, true);
     // 页面点空白处时把焦点拉回扫码框，方便枪输入
     document.addEventListener("click", (e) => {
       const id = (e.target && e.target.id) || "";
