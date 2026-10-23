@@ -495,11 +495,15 @@
       code = normalizeSkuCode(code);
       if (!code) { toast("请输入或扫描 SKU", true); return; }
       try {
-        const data = await api("/api/sku/" + encodeURIComponent(code));
-        commitSnap(data.sku, code);
-        if (!paintFrom(code)) renderSku(data.sku);
-        clearGunUi();
-        if (!silent) toast("已找到 " + data.sku.sku);
+        // Queue behind an in-flight deduct for this code. A lookup that lands
+        // while that write is still open would subtract the same qty twice.
+        await enqueueSku(code, async () => {
+          const data = await api("/api/sku/" + encodeURIComponent(code));
+          commitSnap(data.sku, code);
+          if (!paintFrom(code)) renderSku(data.sku);
+          if (!silent) toast("已找到 " + data.sku.sku);
+        });
+        if (!gunBuf) clearGunUi();
         return true;
       } catch (e) {
         currentSku = null;
