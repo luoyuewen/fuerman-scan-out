@@ -262,7 +262,7 @@
     </div>
 
     <div class="manual">
-      <input id="manualSku" type="text" placeholder="或手动输入 SKU，如 FM-NYL-20-BK" autocomplete="off" autocapitalize="characters" />
+      <input id="manualSku" type="text" placeholder="扫码枪对准扫，或手输 SKU 后回车" autocomplete="off" autocapitalize="characters" />
       <button type="button" id="btnLookup" class="secondary">查询</button>
     </div>
     <p class="hint">大批量出库请用手输数量，不要连扫十几次。</p>
@@ -613,8 +613,46 @@
     $("btnStart").onclick = startScan;
     $("btnStop").onclick = stopScan;
     $("btnLookup").onclick = () => lookup($("manualSku").value);
+
+    // 扫码枪（键盘楔入）：扫到 SKU 后回车 → 与摄像头一样自动出库 1
+    let gunBuf = "";
+    let gunBufAt = 0;
+    function fireGunScan(code) {
+      const c = (code || "").trim();
+      if (!c) return;
+      $("manualSku").value = c;
+      onScanSuccess(c);
+    }
     $("manualSku").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") lookup($("manualSku").value);
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const code = $("manualSku").value;
+      $("manualSku").value = "";
+      fireGunScan(code);
+    });
+    document.addEventListener("keydown", (e) => {
+      const t = e.target;
+      const id = (t && t.id) || "";
+      const tag = (t && t.tagName) || "";
+      // 备注、数量框里正常打字，不抢扫码枪
+      if (id === "noteInput" || id === "qtyInput") return;
+      // 手动 SKU 框由上面的监听处理
+      if (id === "manualSku") return;
+      if (tag === "TEXTAREA") return;
+      if (e.key === "Enter") {
+        if (!gunBuf) return;
+        e.preventDefault();
+        const code = gunBuf;
+        gunBuf = "";
+        fireGunScan(code);
+        return;
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const now = Date.now();
+        if (now - gunBufAt > 120) gunBuf = "";
+        gunBufAt = now;
+        gunBuf += e.key;
+      }
     });
     $("btnOut1").onclick = () => outbound(1);
     $("btnOutQty").onclick = () => outbound($("qtyInput").value);
