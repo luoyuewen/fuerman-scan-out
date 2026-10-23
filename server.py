@@ -215,11 +215,16 @@ def _escape_filter(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-async def _feishu_list_sku(code: str) -> Optional[dict[str, Any]]:
-    if not FEISHU_TABLE_SKU:
-        raise HTTPException(status_code=500, detail="未配置 FEISHU_TABLE_SKU")
+def _normalize_lookup_code(code: str) -> str:
+    """Keep existing normalize/upper behavior for ASCII-letter codes."""
+    code = (code or "").strip()
+    if code.isascii() and any(c.isalpha() for c in code):
+        code = code.upper()
+    return code
+
+
+async def _feishu_query_sku_by_filter(filt: str) -> Optional[dict[str, Any]]:
     token = await _tenant_token()
-    filt = f'CurrentValue.[SKU编码]="{_escape_filter(code)}"'
     url = (
         f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}"
         f"/tables/{FEISHU_TABLE_SKU}/records"
@@ -250,12 +255,13 @@ async def _feishu_list_sku(code: str) -> Optional[dict[str, Any]]:
     status = _text_field(fields.get("库存状态")) or _stock_status(current, safety)
     return {
         "record_id": rec.get("record_id"),
-        "sku": _text_field(fields.get("SKU编码")) or code,
+        "sku": _text_field(fields.get("SKU编码")) or "",
         "name": _text_field(fields.get("商品名称")),
         "spec": _text_field(fields.get("规格/颜色")),
         "size": _text_field(fields.get("尺寸")),
         "material": _text_field(fields.get("材质")),
         "unit": _text_field(fields.get("单位")) or "条",
+        "barcode": _text_field(fields.get("条码")),
         "current": current,
         "safety": safety,
         "inbound_total": _num_field(fields.get("入库数量")),
@@ -264,16 +270,45 @@ async def _feishu_list_sku(code: str) -> Optional[dict[str, Any]]:
     }
 
 
+async def _feishu_list_sku(code: str) -> Optional[dict[str, Any]]:
+    if not FEISHU_TABLE_SKU:
+        raise HTTPException(status_code=500, detail="未配置 FEISHU_TABLE_SKU")
+    code = _normalize_lookup_code(code)
+    if not code:
+        return None
+    # 1) exact match on SKU编码 (existing behavior)
+    item = await _feishu_query_sku_by_filter(
+        f'CurrentValue.[SKU编码]="{_escape_filter(code)}"'
+    )
+    if item:
+        if not item.get("sku"):
+            item["sku"] = code
+        return item
+    # 2) exact match on 条码 when present (shelf / ERP barcode scans)
+    item = await _feishu_query_sku_by_filter(
+        f'CurrentValue.[条码]="{_escape_filter(code)}"'
+    )
+    if item:
+        if not item.get("sku"):
+            item["sku"] = code
+        return item
+    return None
+
+
 async def _feishu_create_outbound(
     sku_record_id: str, sku_code: str, qty: int, note: str, order_no: str, date_ms: int
 ) -> dict[str, Any]:
     if not FEISHU_TABLE_OUT:
         raise HTTPException(status_code=500, detail="未配置 FEISHU_TABLE_OUT")
     token = await _tenant_token()
-    # 关联字段写入 record_id 列表；日期为毫秒时间戳
+    # 关联字段写入 record_id 列表；出库时间为毫秒时间戳；出库时刻精确到秒
+    time_text = datetime.fromtimestamp(
+        date_ms / 1000.0, TZ_SH
+    ).strftime("%Y/%m/%d %H:%M:%S")
     fields: dict[str, Any] = {
         "出库单号": order_no,
-        "日期": date_ms,
+        "出库时间": date_ms,
+        "出库时刻": time_text,
         "SKU": [sku_record_id],
         "数量": qty,
     }
@@ -296,7 +331,8 @@ async def _feishu_create_outbound(
         if "SKU" in msg or data.get("code") in (1254045, 1254060, 1254013):
             fields_alt = {
                 "出库单号": order_no,
-                "日期": date_ms,
+                "出库时间": date_ms,
+                "出库时刻": time_text,
                 "数量": qty,
                 "备注": note or f"扫码出库 {sku_code}",
             }

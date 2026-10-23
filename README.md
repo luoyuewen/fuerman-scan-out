@@ -71,7 +71,8 @@ export FEISHU_TABLE_OUT=tblxxxxxxxx   # 出库记录
 | 字段 | 内容 |
 |------|------|
 | 出库单号 | `CK-20261022-163045-A1B2` 形式 |
-| 日期 | 当天（毫秒时间戳，亚洲/上海） |
+| 出库时间 | 毫秒时间戳（亚洲/上海） |
+| 出库时刻 | `YYYY/MM/DD HH:MM:SS`，精确到秒 |
 | SKU | 关联到「商品SKU库存」对应行的 `record_id` |
 | 数量 | 正整数 |
 | 备注 | 可选 |
@@ -81,7 +82,7 @@ export FEISHU_TABLE_OUT=tblxxxxxxxx   # 出库记录
 ## API
 
 - `GET /api/health` — 健康检查、是否演示模式
-- `GET /api/sku/{code}` — 按 SKU 编码查询
+- `GET /api/sku/{code}` — 按 SKU 编码查询；正式模式先精确匹配「SKU编码」，没有再精确匹配「条码」
 - `POST /api/outbound` — body: `{"sku":"FM-NYL-20-BK","qty":10,"note":"..."}`  
   创建出库记录并返回更新后的库存卡
 - `GET /api/demo/skus` / `POST /api/demo/reset` — 仅演示模式
@@ -99,7 +100,7 @@ export FEISHU_TABLE_OUT=tblxxxxxxxx   # 出库记录
 
 ## 二维码内容
 
-打印标签上的二维码内容 = **SKU 编码本身**（例如 `FM-NYL-20-BK`），下面再印同一编号方便肉眼分辨。扫码后本页按编码查飞书记录。
+打印标签上的二维码内容 = **SKU 编码本身**（例如 `FM-NYL-20-BK`），下面再印同一编号方便肉眼分辨。扫码后本页按编码查飞书记录。货架条码枪扫到的内容若是表里的「条码」，正式模式同样能查到对应 SKU。含英文字母的编码会按现有规则转成大写后再查。
 
 ## 规模提示（约 2 万 SKU）
 
@@ -110,8 +111,8 @@ export FEISHU_TABLE_OUT=tblxxxxxxxx   # 出库记录
 
 | 现象 | 处理 |
 |------|------|
-| 未找到 SKU | 确认编码与表里「SKU编码」完全一致；正式模式确认 `FEISHU_TABLE_SKU` |
-| 写出库失败 | 应用是否已加入该 Base 协作者；出库表字段名是否为「出库单号/日期/SKU/数量/备注」；SKU 是否为关联字段 |
+| 未找到 SKU | 确认编码与表里「SKU编码」或「条码」完全一致；正式模式确认 `FEISHU_TABLE_SKU` |
+| 写出库失败 | 应用是否已加入该 Base 协作者；出库表字段名是否为「出库单号/出库时间/出库时刻/SKU/数量/备注」；SKU 是否为关联字段 |
 | 库存不减 | 检查主表「出库数量」「当前库存」公式是否指向「出库记录」 |
 | 相机黑屏 | 用 HTTPS、允许摄像头权限，或改用手动输入 |
 
