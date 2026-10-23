@@ -262,11 +262,15 @@
       <p class="hint" id="browserHint">手机浏览器需 HTTPS 才能开相机；建议在飞书工作台打开本应用。</p>
     </div>
 
+    <!-- 隐藏焦点陷阱：扫码枪无需点击输入框也能输入 -->
+    <input id="gunTrap" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"
+      tabindex="0" aria-hidden="true"
+      style="position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;z-index:-1" />
     <div class="manual">
-      <input id="manualSku" type="text" placeholder="扫码枪点这里再扫，或手输 SKU 后回车" autocomplete="off" autocapitalize="characters" />
+      <input id="manualSku" type="text" placeholder="扫码枪直接扫即可；也可手输条码/SKU 后回车" autocomplete="off" autocapitalize="off" spellcheck="false" />
       <button type="button" id="btnLookup" class="secondary">查询</button>
     </div>
-    <p class="hint" id="gunHint">电脑扫码枪：先把输入法切成英文，再点一下上方输入框后扫。枪自己响不等于已出库；看页顶绿色成功条。</p>
+    <p class="hint" id="gunHint">电脑扫码枪：页面保持打开并置于前台，输入法切英文，无需点输入框，直接扫。枪响后看页顶绿色成功条才算出库成功。</p>
     <p class="hint">大批量出库请用手输数量，不要连扫十几次。</p>
     <div id="demoChips" class="demo-list hidden"></div>
   </section>
@@ -364,7 +368,7 @@
       const st = $("skuStatus");
       st.textContent = sku.status || "正常";
       st.className = "status " + statusClass(sku.status);
-      $("manualSku").value = sku.sku;
+      // 不把编码写回输入框，避免下一枪追加拼接
       const hint = $("outSkuHint");
       if (hint) hint.textContent = "当前：" + sku.sku + " · 库存 " + sku.current + " " + (sku.unit || "条");
     }
@@ -388,8 +392,9 @@
       // 全角英数字 → 半角
       code = code.replace(/[！-～]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
       code = code.replace(/\s+/g, "");
-      // 常见扫码枪后缀
-      code = code.replace(/[\r\n\t]+$/g, "");
+      // 扫码枪终止符 / 后缀：Enter 已吃掉，部分枪会追加 | 或 \r
+      code = code.replace(/[|\r\n\t]+$/g, "");
+      code = code.replace(/^[|]+|[|]+$/g, "");
       if (/^https?:\/\//i.test(code)) {
         try {
           const u = new URL(code);
@@ -401,8 +406,16 @@
           }
         } catch (_) {}
       }
-      // 我们的 SKU 统一大写
-      if (/^[A-Za-z0-9._\-]+$/.test(code)) code = code.toUpperCase();
+      // 若发生过拼接（旧 SKU + 多段条码），优先取最后一段纯数字条码（≥6 位）
+      if (/[\u4e00-\u9fff]/.test(code) || (code.match(/\d{6,}/g) || []).length > 1) {
+        const digits = code.match(/\d{6,}/g);
+        if (digits && digits.length) code = digits[digits.length - 1];
+      } else if (/[A-Za-z0-9._\-]*\d{6,}[A-Za-z0-9._\-]*\d{6,}/.test(code)) {
+        const digits = code.match(/\d{6,}/g);
+        if (digits && digits.length) code = digits[digits.length - 1];
+      }
+      // 我们的 SKU 统一大写（纯数字条码保持原样）
+      if (/^[A-Za-z0-9._\-]+$/.test(code) && /[A-Za-z]/.test(code)) code = code.toUpperCase();
       return code.trim();
     }
 
@@ -413,6 +426,7 @@
       try {
         const data = await api("/api/sku/" + encodeURIComponent(code));
         renderSku(data.sku);
+        clearGunUi();
         if (!silent) toast("已找到 " + data.sku.sku);
         return true;
       } catch (e) {
@@ -421,6 +435,7 @@
         const hint = $("outSkuHint");
         if (hint) hint.textContent = "先扫码或查询 SKU，再出库。";
         const shown = JSON.stringify(normalizeSkuCode(raw) || String(raw || ""));
+        clearGunUi();
         toast((e.message || "查询失败") + "　扫到：" + shown, true);
         showFlash("未找到　扫到：" + shown, true);
         beep(false);
@@ -447,12 +462,14 @@
         toast(okMsg);
         showFlash("出库成功 ×" + data.qty + "　" + (data.sku && data.sku.sku ? data.sku.sku : "") + "　剩余 " + remain, false);
         beep(true);
+        clearGunUi();
         focusGunInput();
         $("qtyInput").value = 1;
       } catch (e) {
         toast(e.message || "出库失败", true);
         showFlash(e.message || "出库失败", true);
         beep(false);
+        clearGunUi();
         focusGunInput();
       } finally {
         $("btnOut1").disabled = false;
@@ -637,15 +654,36 @@
     $("btnFeishuScan").onclick = feishuScan;
     $("btnStart").onclick = startScan;
     $("btnStop").onclick = stopScan;
-    $("btnLookup").onclick = () => lookup($("manualSku").value);
+    $("btnLookup").onclick = () => {
+      const v = $("manualSku").value;
+      clearGunUi();
+      lookup(v);
+    };
 
-    // 扫码枪（键盘楔入）：扫到 SKU 后回车 → 与摄像头一样自动出库 1
+    // 扫码枪（键盘楔入）：全局捕获，无需点击输入框；每扫一枪清空缓冲，防止号码拼接
     let gunBuf = "";
     let gunBufAt = 0;
+    const GUN_KEY_GAP_MS = 100; // 键间隔超过此值视为新一枪，丢弃旧缓冲
+    function isGunProtectedTarget(tgt) {
+      if (!tgt) return false;
+      const id = tgt.id || "";
+      if (id === "noteInput" || id === "qtyInput") return true;
+      if (tgt.tagName === "TEXTAREA") return true;
+      return false;
+    }
+    function clearGunUi() {
+      gunBuf = "";
+      gunBufAt = 0;
+      const a = $("manualSku");
+      const b = $("gunTrap");
+      if (a) a.value = "";
+      if (b) b.value = "";
+    }
     function focusGunInput() {
-      const el = $("manualSku");
+      // 优先隐藏陷阱，保证未点输入框也能收枪；手输时用户会主动点 manualSku
+      const el = $("gunTrap") || $("manualSku");
       if (!el) return;
-      try { el.focus({ preventScroll: false }); } catch (_) { el.focus(); }
+      try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (__) {} }
     }
     function showFlash(msg, isErr) {
       const el = $("scanFlash");
@@ -657,63 +695,88 @@
       el._t = setTimeout(() => { el.style.display = "none"; }, 3500);
     }
     function fireGunScan(code) {
-      const c = (code || "").trim();
+      // 先清空 UI，再查库；即使 API 慢/失败，输入框也不会残留旧码
+      clearGunUi();
+      let c = (code || "").replace(/[|]+/g, "").trim();
+      c = normalizeSkuCode(c);
       if (!c) return;
-      $("manualSku").value = c;
       onScanSuccess(c, { fromGun: true });
-      setTimeout(focusGunInput, 50);
+      setTimeout(focusGunInput, 30);
+      setTimeout(focusGunInput, 200);
+      setTimeout(clearGunUi, 250); // 查询/出库异步完成后再次清空，防 render 竞态
     }
     function appendGunChar(ch) {
+      if (ch === "|") return; // 终止符不进缓冲
       const now = Date.now();
-      if (now - gunBufAt > 120) gunBuf = "";
+      // 键间隔 >100ms：丢弃旧缓冲，只保留本枪突发
+      if (!gunBufAt || (now - gunBufAt > GUN_KEY_GAP_MS)) gunBuf = "";
       gunBufAt = now;
       gunBuf += ch;
       const el = $("manualSku");
-      if (el) el.value = gunBuf;
+      if (el) el.value = gunBuf; // 整框覆盖，绝不在旧 value 后拼接
+      const trap = $("gunTrap");
+      if (trap) trap.value = gunBuf;
     }
     function commitGunBuf() {
-      const code = gunBuf || (($("manualSku") && $("manualSku").value) || "");
-      gunBuf = "";
-      if ($("manualSku")) $("manualSku").value = "";
+      // 优先用本枪缓冲；若缓冲空才读输入框（手输回车）
+      const typed = (($("manualSku") && $("manualSku").value) || "").trim();
+      const trap = (($("gunTrap") && $("gunTrap").value) || "").trim();
+      let code = (gunBuf || typed || trap || "").trim();
+      code = code.replace(/[|]+$/g, "");
+      clearGunUi();
       fireGunScan(code);
     }
-    // 在捕获阶段拦键盘，绕过中文输入法，避免扫码枪内容被 IME 吃掉
+    // 捕获阶段拦键盘：页面任意焦点（除备注/数量）都能收枪；绕过 IME
     document.addEventListener("keydown", (e) => {
-      const tgt = e.target;
-      const id = (tgt && tgt.id) || "";
-      const tag = (tgt && tgt.tagName) || "";
-      if (id === "noteInput" || id === "qtyInput") return;
-      if (tag === "TEXTAREA") return;
+      if (isGunProtectedTarget(e.target)) return;
       if (e.isComposing || e.keyCode === 229) {
-        // 仍在输入法组字：尽量打断，提示切英文
-        if (id === "manualSku") {
-          e.preventDefault();
-          showFlash("请切换到英文输入法后再扫码枪", true);
-        }
+        e.preventDefault();
+        clearGunUi();
+        showFlash("请切换到英文输入法后再扫码枪", true);
         return;
       }
-      if (e.key === "Enter" || e.key === "Tab") {
-        if (id === "manualSku" || gunBuf) {
+      // Enter / Tab / | 都视为一枪结束（得力等枪可能用 | 作后缀）
+      if (e.key === "Enter" || e.key === "Tab" || e.key === "|") {
+        const has = !!(gunBuf || ($("manualSku") && $("manualSku").value) || ($("gunTrap") && $("gunTrap").value));
+        e.preventDefault();
+        e.stopPropagation();
+        if (has) commitGunBuf();
+        else clearGunUi();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        clearGunUi();
+        return;
+      }
+      if (e.key === "Backspace") {
+        if (gunBuf) {
           e.preventDefault();
-          commitGunBuf();
+          gunBuf = gunBuf.slice(0, -1);
+          gunBufAt = Date.now();
+          if ($("manualSku")) $("manualSku").value = gunBuf;
         }
         return;
       }
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        // 扫码枪或手动在 SKU 框：自己收字符，不交给输入法
-        if (id === "manualSku" || id === "" || tag === "BODY" || tag === "HTML" || tag === "BUTTON" || tag === "DIV") {
-          e.preventDefault();
-          appendGunChar(e.key);
-          if (id !== "manualSku") focusGunInput();
-        }
+        e.preventDefault();
+        e.stopPropagation();
+        // | 已在上面当终止符；其它字符进缓冲
+        appendGunChar(e.key);
       }
     }, true);
-    // 页面点空白处时把焦点拉回扫码框，方便枪输入
+    // 空白处点击 / 窗口重新聚焦 → 拉回枪焦点
     document.addEventListener("click", (e) => {
+      if (isGunProtectedTarget(e.target)) return;
       const id = (e.target && e.target.id) || "";
-      if (id === "noteInput" || id === "qtyInput" || id === "manualSku") return;
-      if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON" || e.target.tagName === "A")) return;
-      focusGunInput();
+      if (id === "manualSku" || id === "gunTrap") return;
+      if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT")) return;
+      // 按钮点完后把焦点要回来，方便连扫
+      setTimeout(focusGunInput, 0);
+    });
+    window.addEventListener("focus", () => setTimeout(focusGunInput, 0));
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) setTimeout(focusGunInput, 50);
     });
     focusGunInput();
     $("btnOut1").onclick = () => outbound(1);
