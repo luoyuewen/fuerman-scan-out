@@ -9,8 +9,9 @@
   <meta name="apple-mobile-web-app-title" content="扫码出库" />
   <meta name="mobile-web-app-capable" content="yes" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=10" />
+  <link rel="icon" href="/favicon.ico?v=10" sizes="any" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=10" />
   <title>富尔曼 · 扫码出库</title>
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <script src="https://lf1-cdn-tos.bytegoofy.com/goofy/lark/op/h5-js-sdk-1.5.16.js"></script>
@@ -270,7 +271,7 @@
       <input id="manualSku" type="text" placeholder="扫码枪直接扫即可；也可手输条码/SKU 后回车" autocomplete="off" autocapitalize="off" spellcheck="false" />
       <button type="button" id="btnLookup" class="secondary">查询</button>
     </div>
-    <p class="hint" id="gunHint">电脑扫码枪：页面保持打开并置于前台，输入法切英文，无需点输入框，直接扫。枪响后看页顶绿色成功条才算出库成功。</p>
+    <p class="hint" id="gunHint">电脑扫码枪：页面保持打开并置于前台，输入法切英文，无需点输入框，直接扫。扫到马上扣数量，页顶绿条立刻亮；如果随后变红，这一枪没有扣成。</p>
     <p class="hint">大批量出库请用手输数量，不要连扫十几次。</p>
     <div id="demoChips" class="demo-list hidden"></div>
   </section>
@@ -359,7 +360,7 @@
       $("card").classList.remove("hidden");
       $("skuName").textContent = sku.name || "（无名称）";
       $("skuCode").textContent = sku.sku;
-      $("skuCurrent").textContent = sku.current;
+      $("skuCurrent").textContent = Math.max(0, Number(sku.current) || 0);
       $("skuSafety").textContent = sku.safety;
       $("skuSpec").textContent = sku.spec || "—";
       $("skuSize").textContent = sku.size || "—";
@@ -370,7 +371,7 @@
       st.className = "status " + statusClass(sku.status);
       // 不把编码写回输入框，避免下一枪追加拼接
       const hint = $("outSkuHint");
-      if (hint) hint.textContent = "当前：" + sku.sku + " · 库存 " + sku.current + " " + (sku.unit || "条");
+      if (hint) hint.textContent = "当前：" + sku.sku + " · 库存 " + Math.max(0, Number(sku.current) || 0) + " " + (sku.unit || "条");
     }
 
     async function api(path, opts) {
@@ -419,15 +420,90 @@
       return code.trim();
     }
 
+    // Server snapshots vs qty already shown but not confirmed. Display = snap − inflight.
+    const serverSnap = new Map();
+    const inflightQty = new Map();
+    const skuChain = new Map();
+    let viewGen = 0;
+
+    function stockStatus(current, safety) {
+      const n = Number(current) || 0;
+      const s = Number(safety) || 0;
+      if (n <= 0) return "缺货";
+      if (n <= s) return "预警";
+      return "正常";
+    }
+
+    function commitSnap(sku, alias) {
+      if (!sku || !sku.sku) return;
+      const copy = Object.assign({}, sku);
+      serverSnap.set(copy.sku, copy);
+      if (copy.barcode) serverSnap.set(String(copy.barcode), copy);
+      if (alias) serverSnap.set(String(alias), copy);
+    }
+
+    function paintFrom(code) {
+      const snap = serverSnap.get(code);
+      if (!snap) return false;
+      const extra = inflightFor(code);
+      const view = Object.assign({}, snap);
+      view.current = (Number(snap.current) || 0) - extra;
+      view.outbound_total = (Number(snap.outbound_total) || 0) + extra;
+      view.status = stockStatus(view.current, view.safety);
+      renderSku(view);
+      return true;
+    }
+
+    function inflightFor(code) {
+      const snap = serverSnap.get(code);
+      const keys = [code];
+      if (snap && snap.sku) keys.push(snap.sku);
+      if (snap && snap.barcode) keys.push(String(snap.barcode));
+      let n = 0;
+      const seen = new Set();
+      keys.forEach((k) => {
+        if (!k || seen.has(k)) return;
+        seen.add(k);
+        n += inflightQty.get(k) || 0;
+      });
+      return n;
+    }
+
+    function addInflight(code, qty) {
+      inflightQty.set(code, (inflightQty.get(code) || 0) + qty);
+    }
+
+    function subInflight(code, qty) {
+      const n = (inflightQty.get(code) || 0) - qty;
+      if (n <= 0) inflightQty.delete(code);
+      else inflightQty.set(code, n);
+    }
+
+    function enqueueSku(code, fn) {
+      const prev = skuChain.get(code) || Promise.resolve();
+      const next = prev.then(fn, fn);
+      skuChain.set(code, next);
+      const clear = () => {
+        if (skuChain.get(code) === next) skuChain.delete(code);
+      };
+      next.then(clear, clear);
+      return next;
+    }
+
     async function lookup(code, silent) {
       const raw = code;
       code = normalizeSkuCode(code);
       if (!code) { toast("请输入或扫描 SKU", true); return; }
       try {
-        const data = await api("/api/sku/" + encodeURIComponent(code));
-        renderSku(data.sku);
-        clearGunUi();
-        if (!silent) toast("已找到 " + data.sku.sku);
+        // Queue behind an in-flight deduct for this code. A lookup that lands
+        // while that write is still open would subtract the same qty twice.
+        await enqueueSku(code, async () => {
+          const data = await api("/api/sku/" + encodeURIComponent(code));
+          commitSnap(data.sku, code);
+          if (!paintFrom(code)) renderSku(data.sku);
+          if (!silent) toast("已找到 " + data.sku.sku);
+        });
+        if (!gunBuf) clearGunUi();
         return true;
       } catch (e) {
         currentSku = null;
@@ -447,30 +523,46 @@
       if (!currentSku) { toast("请先扫码或查询 SKU", true); return; }
       qty = parseInt(qty, 10);
       if (!qty || qty < 1) { toast("数量至少为 1", true); return; }
+      const code = currentSku.sku;
       const note = $("noteInput").value.trim();
+      const gen = ++viewGen;
+      $("btnOut1").disabled = true;
+      $("btnOutQty").disabled = true;
       try {
-        $("btnOut1").disabled = true;
-        $("btnOutQty").disabled = true;
-        const data = await api("/api/outbound", {
-          method: "POST",
-          body: JSON.stringify({ sku: currentSku.sku, qty, note: note || undefined }),
+        const data = await enqueueSku(code, async () => {
+          addInflight(code, qty);
+          try {
+            const res = await api("/api/outbound", {
+              method: "POST",
+              body: JSON.stringify({ sku: code, qty, note: note || undefined }),
+            });
+            subInflight(code, qty);
+            commitSnap(res.sku, code);
+            return res;
+          } catch (err) {
+            subInflight(code, qty);
+            throw err;
+          }
         });
-        renderSku(data.sku);
-        $("lastOrder").textContent = "最近出库单：" + data.order_no + " × " + data.qty;
-        const remain = data.sku && data.sku.current;
-        const okMsg = (data.message || "出库成功") + "，剩余 " + remain;
-        toast(okMsg);
-        showFlash("出库成功 ×" + data.qty + "　" + (data.sku && data.sku.sku ? data.sku.sku : "") + "　剩余 " + remain, false);
+        const remain = Math.max(0, (Number((serverSnap.get(code) || data.sku).current) || 0) - inflightFor(code));
+        if (gen === viewGen) {
+          paintFrom(code);
+          $("lastOrder").textContent = "最近出库单：" + data.order_no + " × " + data.qty;
+          const okMsg = (data.message || "出库成功") + "，剩余 " + remain;
+          toast(okMsg);
+          showFlash("出库成功 ×" + data.qty + "　" + (data.sku && data.sku.sku ? data.sku.sku : code) + "　剩余 " + remain, false);
+          $("qtyInput").value = 1;
+        }
         beep(true);
         clearGunUi();
         focusGunInput();
-        $("qtyInput").value = 1;
       } catch (e) {
         toast(e.message || "出库失败", true);
         showFlash(e.message || "出库失败", true);
         beep(false);
         clearGunUi();
         focusGunInput();
+        if (gen === viewGen) paintFrom(code);
       } finally {
         $("btnOut1").disabled = false;
         $("btnOutQty").disabled = false;
@@ -480,14 +572,78 @@
     function onScanSuccess(decodedText, opts) {
       opts = opts || {};
       const now = Date.now();
-      const code = (decodedText || "").trim();
-      if (!code) return;
+      const raw = (decodedText || "").trim();
+      if (!raw) return;
       // 相机连扫防抖 2.5 秒；扫码枪同码防抖 0.45 秒（可连扫同一 SKU）
       const gap = opts.fromGun ? 450 : 2500;
-      if (code === lastScanCode && now - lastScanAt < gap) return;
-      lastScanCode = code;
+      if (raw === lastScanCode && now - lastScanAt < gap) return;
+      lastScanCode = raw;
       lastScanAt = now;
-      lookup(code, true).then((ok) => { if (ok) outbound(1); });
+      const code = normalizeSkuCode(raw);
+      if (!code) { toast("请输入或扫描 SKU", true); return; }
+      const qty = 1;
+      const snap = serverSnap.get(code);
+      if (snap) {
+        const avail = (Number(snap.current) || 0) - inflightFor(code);
+        if (avail < qty) {
+          clearGunUi();
+          showFlash("库存不足：当前 " + Math.max(0, avail) + "　" + code, true);
+          beep(false);
+          focusGunInput();
+          return;
+        }
+      }
+      // 绿条和蜂鸣在请求发出前就响。同一 SKU 串行写，避免一次扫描扣两次。
+      const gen = ++viewGen;
+      addInflight(code, qty);
+      paintFrom(code);
+      const remainNow = snap
+        ? Math.max(0, (Number(snap.current) || 0) - inflightFor(code))
+        : null;
+      clearGunUi();
+      showFlash("出库成功 ×" + qty + "　" + code + (remainNow === null ? "" : "　剩余 " + remainNow), false);
+      beep(true);
+      focusGunInput();
+      const note = ($("noteInput") && $("noteInput").value.trim()) || "";
+      enqueueSku(code, async () => {
+        try {
+          const data = await api("/api/outbound", {
+            method: "POST",
+            body: JSON.stringify({ sku: code, qty, note: note || undefined }),
+          });
+          subInflight(code, qty);
+          commitSnap(data.sku, code);
+          if (gen === viewGen) {
+            paintFrom(code);
+            const remain = Math.max(0, (Number(serverSnap.get(code).current) || 0) - inflightFor(code));
+            $("lastOrder").textContent = "最近出库单：" + data.order_no + " × " + data.qty;
+            showFlash("出库成功 ×" + data.qty + "　" + ((data.sku && data.sku.sku) || code) + "　剩余 " + remain, false);
+            $("qtyInput").value = 1;
+          } else if ($("lastOrder") && data.order_no) {
+            $("lastOrder").textContent = "最近出库单：" + data.order_no + " × " + data.qty;
+          }
+        } catch (e) {
+          subInflight(code, qty);
+          const missing = /未找到/.test(String((e && e.message) || ""));
+          if (!missing) {
+            try {
+              const again = await api("/api/sku/" + encodeURIComponent(code));
+              commitSnap(again.sku, code);
+            } catch (_) {}
+          }
+          if (gen === viewGen) {
+            if (serverSnap.has(code)) paintFrom(code);
+            showFlash(((e && e.message) || "出库失败") + "　扫到：" + code, true);
+          }
+          toast((e && e.message) || "出库失败", true);
+          beep(false);
+          // Don't wipe a newer burst already sitting in the gun buffer.
+          if (gen === viewGen && !gunBuf) {
+            clearGunUi();
+            focusGunInput();
+          }
+        }
+      });
     }
 
     // ---------- 飞书 JSAPI ----------

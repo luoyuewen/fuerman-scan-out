@@ -7,6 +7,7 @@ DEMO=1 时用 /workspace/qr/sample.csv 内存演示，不连飞书。
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import os
@@ -14,6 +15,7 @@ import re
 import secrets
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -42,7 +44,50 @@ TZ_SH = timezone(timedelta(hours=8))
 
 ROOT = Path(__file__).resolve().parent
 
-app = FastAPI(title="富尔曼扫码出库", version="1.1.0")
+# One pooled client so scan → Feishu reuses TLS instead of handshaking per call.
+_http: Optional[httpx.AsyncClient] = None
+
+
+def _aclient() -> httpx.AsyncClient:
+    global _http
+    if _http is None or _http.is_closed:
+        _http = httpx.AsyncClient(
+            timeout=httpx.Timeout(12.0, connect=4.0),
+            limits=httpx.Limits(
+                max_keepalive_connections=8,
+                max_connections=16,
+                keepalive_expiry=120.0,
+            ),
+        )
+    return _http
+
+
+async def _warm_feishu() -> None:
+    """Open the Feishu connection and cache the tenant token before the first scan."""
+    try:
+        await _tenant_token()
+    except Exception:
+        return
+
+
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    global _http
+    _http = _aclient()
+    warm: Optional[asyncio.Task[Any]] = None
+    if not DEMO and FEISHU_APP_ID and FEISHU_APP_SECRET:
+        warm = asyncio.create_task(_warm_feishu())
+    try:
+        yield
+    finally:
+        if warm is not None and not warm.done():
+            warm.cancel()
+        if _http is not None and not _http.is_closed:
+            await _http.aclose()
+        _http = None
+
+
+app = FastAPI(title="富尔曼扫码出库", version="1.2.0", lifespan=_app_lifespan)
 
 # ---------------------------------------------------------------------------
 # Demo store
@@ -108,12 +153,11 @@ async def _tenant_token() -> str:
         return _token_cache["token"]
     if not FEISHU_APP_ID or not FEISHU_APP_SECRET:
         raise HTTPException(status_code=500, detail="未配置 FEISHU_APP_ID / FEISHU_APP_SECRET")
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.post(
-            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
-            json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET},
-        )
-        data = r.json()
+    r = await _aclient().post(
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET},
+    )
+    data = r.json()
     if data.get("code") != 0:
         raise HTTPException(
             status_code=502,
@@ -133,13 +177,12 @@ async def _jsapi_ticket() -> str:
     if _ticket_cache["ticket"] and now < _ticket_cache["expires_at"] - 60:
         return _ticket_cache["ticket"]
     token = await _tenant_token()
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.post(
-            "https://open.feishu.cn/open-apis/jssdk/ticket/get",
-            headers={"Authorization": f"Bearer {token}"},
-            json={},
-        )
-        data = r.json()
+    r = await _aclient().post(
+        "https://open.feishu.cn/open-apis/jssdk/ticket/get",
+        headers={"Authorization": f"Bearer {token}"},
+        json={},
+    )
+    data = r.json()
     if data.get("code") != 0:
         raise HTTPException(
             status_code=502,
@@ -223,23 +266,37 @@ def _normalize_lookup_code(code: str) -> str:
     return code
 
 
+def _current_from_fields(fields: dict[str, Any]) -> tuple[int, int, int]:
+    """Stock is inbound SUM − outbound SUM.
+
+    「当前库存」is a formula and lags the row we just wrote, so it is only a
+    fallback when the SUM columns are empty.
+    """
+    inbound = _num_field(fields.get("入库数量"))
+    outbound = _num_field(fields.get("出库数量"))
+    formula = _num_field(fields.get("当前库存"))
+    has_parts = ("入库数量" in fields) or ("出库数量" in fields)
+    if has_parts and (inbound + outbound) > 0:
+        return inbound - outbound, inbound, outbound
+    return formula, inbound, outbound
+
+
 async def _feishu_query_sku_by_filter(filt: str) -> Optional[dict[str, Any]]:
     token = await _tenant_token()
     url = (
         f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}"
         f"/tables/{FEISHU_TABLE_SKU}/records"
     )
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.get(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            params={
-                "filter": filt,
-                "page_size": 20,
-                "display_formula_ref": "true",
-            },
-        )
-        data = r.json()
+    r = await _aclient().get(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        params={
+            "filter": filt,
+            "page_size": 20,
+            "display_formula_ref": "true",
+        },
+    )
+    data = r.json()
     if data.get("code") != 0:
         raise HTTPException(
             status_code=502,
@@ -250,7 +307,7 @@ async def _feishu_query_sku_by_filter(filt: str) -> Optional[dict[str, Any]]:
         return None
     rec = items[0]
     fields = rec.get("fields") or {}
-    current = _num_field(fields.get("当前库存"))
+    current, inbound, outbound = _current_from_fields(fields)
     safety = _num_field(fields.get("安全库存"))
     status = _text_field(fields.get("库存状态")) or _stock_status(current, safety)
     return {
@@ -264,10 +321,131 @@ async def _feishu_query_sku_by_filter(filt: str) -> Optional[dict[str, Any]]:
         "barcode": _text_field(fields.get("条码")),
         "current": current,
         "safety": safety,
-        "inbound_total": _num_field(fields.get("入库数量")),
-        "outbound_total": _num_field(fields.get("出库数量")),
+        "inbound_total": inbound,
+        "outbound_total": outbound,
         "status": status,
     }
+
+
+# Raw Feishu rows, keyed by scanned code / SKU / barcode. Short TTL so a repeat
+# scan skips the read; stock still moves via the overlay below.
+_SKU_CACHE_TTL = 20.0
+_sku_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+# Writes Feishu's SUM has not counted yet, keyed by canonical SKU.
+# base_out is the outbound_total we last observed; extra is qty we added since.
+_overlay: dict[str, dict[str, int]] = {}
+_sku_locks: dict[str, asyncio.Lock] = {}
+_locks_guard = asyncio.Lock()
+
+
+def _cache_get(code: str) -> Optional[dict[str, Any]]:
+    hit = _sku_cache.get(code)
+    if not hit:
+        return None
+    ts, raw = hit
+    if time.monotonic() - ts > _SKU_CACHE_TTL:
+        _sku_cache.pop(code, None)
+        return None
+    return dict(raw)
+
+
+def _cache_put(query: str, item: dict[str, Any]) -> None:
+    raw = dict(item)
+    packed = (time.monotonic(), raw)
+    _sku_cache[query] = packed
+    sku = str(raw.get("sku") or "")
+    if sku:
+        _sku_cache[sku] = packed
+    barcode = str(raw.get("barcode") or "")
+    if barcode:
+        _sku_cache[barcode] = packed
+
+
+def _overlay_left(raw: dict[str, Any]) -> int:
+    """Qty we wrote that this Feishu snapshot does not show yet.
+
+    Either signal can reveal that the write landed: outbound SUM rose, or
+    reported current fell. When the formula later catches up we must not
+    subtract the same qty again.
+    """
+    sku = str(raw.get("sku") or "")
+    ov = _overlay.get(sku)
+    if not ov:
+        return 0
+    reported = int(raw.get("current") or 0)
+    base_current = int(ov.get("base_current", reported))
+    drop = base_current - reported
+    if drop < 0:
+        # Inbound (or a correction) raised stock. Don't treat that as a
+        # negative "seen", or the extra qty would be stuck forever.
+        ov["base_current"] = reported
+        drop = 0
+    seen_by_out = int(raw.get("outbound_total") or 0) - int(ov.get("base_out") or 0)
+    if seen_by_out < 0:
+        seen_by_out = 0
+    seen = drop if drop > seen_by_out else seen_by_out
+    left = int(ov.get("extra") or 0) - seen
+    if left <= 0:
+        _overlay.pop(sku, None)
+        return 0
+    ov["extra"] = left
+    ov["base_out"] = int(raw.get("outbound_total") or 0)
+    ov["base_current"] = reported
+    return left
+
+
+def _apply_overlay(raw: dict[str, Any]) -> dict[str, Any]:
+    left = _overlay_left(raw)
+    if left <= 0:
+        return raw
+    shown = dict(raw)
+    shown["current"] = int(raw.get("current") or 0) - left
+    shown["outbound_total"] = int(raw.get("outbound_total") or 0) + left
+    shown["status"] = _stock_status(shown["current"], int(shown.get("safety") or 0))
+    return shown
+
+
+def _commit_overlay(raw: dict[str, Any], qty: int) -> dict[str, Any]:
+    sku = str(raw.get("sku") or "")
+    left = _overlay_left(raw)
+    ov = _overlay.get(sku)
+    if ov is None:
+        ov = {
+            "base_out": int(raw.get("outbound_total") or 0),
+            "base_current": int(raw.get("current") or 0),
+            "extra": 0,
+        }
+        _overlay[sku] = ov
+    ov["extra"] = left + qty
+    shown = dict(raw)
+    shown["current"] = int(raw.get("current") or 0) - ov["extra"]
+    shown["outbound_total"] = int(raw.get("outbound_total") or 0) + ov["extra"]
+    shown["status"] = _stock_status(shown["current"], int(shown.get("safety") or 0))
+    return shown
+
+
+async def _lock_for(key: str) -> asyncio.Lock:
+    async with _locks_guard:
+        lock = _sku_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _sku_locks[key] = lock
+        return lock
+
+
+def _silence_task(task: asyncio.Task[Any]) -> None:
+    task.cancel()
+
+    def _done(done: asyncio.Task[Any]) -> None:
+        if done.cancelled():
+            return
+        try:
+            done.exception()
+        except Exception:
+            return
+
+    task.add_done_callback(_done)
 
 
 async def _feishu_list_sku(code: str) -> Optional[dict[str, Any]]:
@@ -276,21 +454,37 @@ async def _feishu_list_sku(code: str) -> Optional[dict[str, Any]]:
     code = _normalize_lookup_code(code)
     if not code:
         return None
-    # 1) exact match on SKU编码 (existing behavior)
-    item = await _feishu_query_sku_by_filter(
-        f'CurrentValue.[SKU编码]="{_escape_filter(code)}"'
+    cached = _cache_get(code)
+    if cached:
+        return cached
+    # SKU编码 and 条码 in parallel. A barcode used to wait for a SKU miss first.
+    # Prefer the SKU编码 hit when both match (same order as the old sequential lookup).
+    sku_task = asyncio.create_task(
+        _feishu_query_sku_by_filter(
+            f'CurrentValue.[SKU编码]="{_escape_filter(code)}"'
+        )
     )
+    bar_task = asyncio.create_task(
+        _feishu_query_sku_by_filter(
+            f'CurrentValue.[条码]="{_escape_filter(code)}"'
+        )
+    )
+    try:
+        item = await sku_task
+    except Exception:
+        _silence_task(bar_task)
+        raise
     if item:
+        _silence_task(bar_task)
         if not item.get("sku"):
             item["sku"] = code
+        _cache_put(code, item)
         return item
-    # 2) exact match on 条码 when present (shelf / ERP barcode scans)
-    item = await _feishu_query_sku_by_filter(
-        f'CurrentValue.[条码]="{_escape_filter(code)}"'
-    )
+    item = await bar_task
     if item:
         if not item.get("sku"):
             item["sku"] = code
+        _cache_put(code, item)
         return item
     return None
 
@@ -318,13 +512,12 @@ async def _feishu_create_outbound(
         f"https://open.feishu.cn/open-apis/bitable/v1/apps/{FEISHU_APP_TOKEN}"
         f"/tables/{FEISHU_TABLE_OUT}/records"
     )
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        r = await client.post(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            json={"fields": fields},
-        )
-        data = r.json()
+    r = await _aclient().post(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        json={"fields": fields},
+    )
+    data = r.json()
     if data.get("code") != 0:
         # 兼容字段名差异：有的表可能把关联列叫「SKU编码」或文本字段
         msg = str(data.get("msg") or data)
@@ -338,13 +531,12 @@ async def _feishu_create_outbound(
             }
             # 再试：文本 SKU
             fields_alt["SKU"] = sku_code
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                r2 = await client.post(
-                    url,
-                    headers={"Authorization": f"Bearer {token}"},
-                    json={"fields": fields_alt},
-                )
-                data = r2.json()
+            r2 = await _aclient().post(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                json={"fields": fields_alt},
+            )
+            data = r2.json()
         if data.get("code") != 0:
             raise HTTPException(
                 status_code=502,
@@ -426,7 +618,7 @@ async def get_sku(code: str):
     item = await _feishu_list_sku(code)
     if not item:
         raise HTTPException(status_code=404, detail=f"未找到 SKU：{code}")
-    return {"ok": True, "demo": False, "sku": item}
+    return {"ok": True, "demo": False, "sku": _apply_overlay(item)}
 
 
 @app.post("/api/outbound")
@@ -467,26 +659,26 @@ async def create_outbound(body: OutboundBody):
             "message": f"出库成功 {qty} {item.get('unit') or '条'}",
         }
 
-    item = await _feishu_list_sku(code)
-    if not item:
+    raw = await _feishu_list_sku(code)
+    if not raw:
         raise HTTPException(status_code=404, detail=f"未找到 SKU：{code}")
-    if item["current"] < qty:
-        raise HTTPException(
-            status_code=400,
-            detail=f"库存不足：当前 {item['current']}，要出 {qty}",
-        )
-    rid = item.get("record_id")
-    if not rid:
-        raise HTTPException(status_code=500, detail="SKU 记录缺少 record_id，无法关联出库")
-    await _feishu_create_outbound(rid, code, qty, note, order_no, date_ms)
-    # 重新读一遍，拿公式更新后的库存（可能有短暂延迟）
-    refreshed = await _feishu_list_sku(code) or item
-    # 乐观扣减：若公式尚未刷新，本地展示减后数量
-    if refreshed["current"] == item["current"]:
-        refreshed = dict(refreshed)
-        refreshed["current"] = max(0, item["current"] - qty)
-        refreshed["outbound_total"] = item.get("outbound_total", 0) + qty
-        refreshed["status"] = _stock_status(refreshed["current"], refreshed["safety"])
+    sku_key = str(raw.get("sku") or _normalize_lookup_code(code))
+    async with await _lock_for(sku_key):
+        # Re-read the short cache under the lock so a burst of the same SKU
+        # counts writes the SUM has not caught up to yet.
+        fresh = _cache_get(sku_key) or raw
+        shown = _apply_overlay(fresh)
+        if shown["current"] < qty:
+            raise HTTPException(
+                status_code=400,
+                detail=f"库存不足：当前 {shown['current']}，要出 {qty}",
+            )
+        rid = fresh.get("record_id")
+        if not rid:
+            raise HTTPException(status_code=500, detail="SKU 记录缺少 record_id，无法关联出库")
+        await _feishu_create_outbound(rid, code, qty, note, order_no, date_ms)
+        # Do not re-query Feishu. The SUM fields lag; the overlay is the new stock.
+        refreshed = _commit_overlay(fresh, qty)
     return {
         "ok": True,
         "demo": False,
@@ -538,19 +730,44 @@ async def service_worker():
     )
 
 
+# no-cache so an installed shortcut refetches the F mark instead of a stale circle.
+_ICON_HEADERS = {"Cache-Control": "no-cache"}
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    return FileResponse(
+        ROOT / "favicon.ico",
+        media_type="image/x-icon",
+        headers=_ICON_HEADERS,
+    )
+
+
 @app.get("/icon-192.png")
 async def icon_192():
-    return FileResponse(ROOT / "icon-192.png", media_type="image/png")
+    return FileResponse(
+        ROOT / "icon-192.png",
+        media_type="image/png",
+        headers=_ICON_HEADERS,
+    )
 
 
 @app.get("/icon-512.png")
 async def icon_512():
-    return FileResponse(ROOT / "icon-512.png", media_type="image/png")
+    return FileResponse(
+        ROOT / "icon-512.png",
+        media_type="image/png",
+        headers=_ICON_HEADERS,
+    )
 
 
 @app.get("/apple-touch-icon.png")
 async def apple_touch_icon():
-    return FileResponse(ROOT / "apple-touch-icon.png", media_type="image/png")
+    return FileResponse(
+        ROOT / "apple-touch-icon.png",
+        media_type="image/png",
+        headers=_ICON_HEADERS,
+    )
 
 
 @app.get("/")
