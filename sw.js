@@ -1,5 +1,5 @@
-const CACHE = 'fuerman-scan-v9';
-const ASSETS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.ico', '/favicon.ico?v=9', '/icon-192.png', '/icon-192.png?v=9', '/icon-512.png', '/icon-512.png?v=9', '/apple-touch-icon.png', '/apple-touch-icon.png?v=9'];
+const CACHE = 'fuerman-scan-v10';
+const ASSETS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.ico', '/favicon.ico?v=10', '/icon-192.png', '/icon-192.png?v=10', '/icon-512.png', '/icon-512.png?v=10', '/apple-touch-icon.png', '/apple-touch-icon.png?v=10'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
 });
