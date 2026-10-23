@@ -730,24 +730,44 @@ async def service_worker():
     )
 
 
+# no-cache so an installed shortcut refetches the F mark instead of a stale circle.
+_ICON_HEADERS = {"Cache-Control": "no-cache"}
+
+
 @app.get("/favicon.ico")
 async def favicon():
-    return FileResponse(ROOT / "favicon.ico", media_type="image/x-icon")
+    return FileResponse(
+        ROOT / "favicon.ico",
+        media_type="image/x-icon",
+        headers=_ICON_HEADERS,
+    )
 
 
 @app.get("/icon-192.png")
 async def icon_192():
-    return FileResponse(ROOT / "icon-192.png", media_type="image/png")
+    return FileResponse(
+        ROOT / "icon-192.png",
+        media_type="image/png",
+        headers=_ICON_HEADERS,
+    )
 
 
 @app.get("/icon-512.png")
 async def icon_512():
-    return FileResponse(ROOT / "icon-512.png", media_type="image/png")
+    return FileResponse(
+        ROOT / "icon-512.png",
+        media_type="image/png",
+        headers=_ICON_HEADERS,
+    )
 
 
 @app.get("/apple-touch-icon.png")
 async def apple_touch_icon():
-    return FileResponse(ROOT / "apple-touch-icon.png", media_type="image/png")
+    return FileResponse(
+        ROOT / "apple-touch-icon.png",
+        media_type="image/png",
+        headers=_ICON_HEADERS,
+    )
 
 
 @app.get("/")
