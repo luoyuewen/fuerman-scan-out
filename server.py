@@ -218,6 +218,9 @@ def _escape_filter(s: str) -> str:
 async def _feishu_list_sku(code: str) -> Optional[dict[str, Any]]:
     if not FEISHU_TABLE_SKU:
         raise HTTPException(status_code=500, detail="未配置 FEISHU_TABLE_SKU")
+    code = (code or "").strip()
+    if code.isascii() and any(c.isalpha() for c in code):
+        code = code.upper()
     token = await _tenant_token()
     filt = f'CurrentValue.[SKU编码]="{_escape_filter(code)}"'
     url = (
@@ -270,10 +273,14 @@ async def _feishu_create_outbound(
     if not FEISHU_TABLE_OUT:
         raise HTTPException(status_code=500, detail="未配置 FEISHU_TABLE_OUT")
     token = await _tenant_token()
-    # 关联字段写入 record_id 列表；日期为毫秒时间戳
+    # 关联字段写入 record_id 列表；出库时间为毫秒时间戳；出库时刻精确到秒
+    time_text = datetime.fromtimestamp(
+        date_ms / 1000.0, TZ_SH
+    ).strftime("%Y/%m/%d %H:%M:%S")
     fields: dict[str, Any] = {
         "出库单号": order_no,
-        "日期": date_ms,
+        "出库时间": date_ms,
+        "出库时刻": time_text,
         "SKU": [sku_record_id],
         "数量": qty,
     }
@@ -296,7 +303,8 @@ async def _feishu_create_outbound(
         if "SKU" in msg or data.get("code") in (1254045, 1254060, 1254013):
             fields_alt = {
                 "出库单号": order_no,
-                "日期": date_ms,
+                "出库时间": date_ms,
+                "出库时刻": time_text,
                 "数量": qty,
                 "备注": note or f"扫码出库 {sku_code}",
             }
