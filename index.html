@@ -8,6 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="扫码出库" />
   <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="scan-build" content="11" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=10" />
   <link rel="icon" href="/favicon.ico?v=10" sizes="any" />
@@ -196,6 +197,44 @@
       font-family: ui-monospace, Menlo, monospace;
     }
     .hidden { display: none !important; }
+    #scanFlash {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      z-index: 10000;
+      min-height: 64px;
+      box-sizing: border-box;
+      padding: 16px 18px;
+      padding-top: calc(16px + env(safe-area-inset-top));
+      font-size: 1.28rem;
+      font-weight: 800;
+      line-height: 1.35;
+      text-align: center;
+      background: #166534;
+      color: #fff;
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+      pointer-events: none;
+    }
+    #scanFlash.show { display: block !important; }
+    #scanFlash.err { background: #991b1b; }
+    .scan-status {
+      border-radius: 12px;
+      padding: 14px 12px;
+      margin-bottom: 10px;
+      font-size: 1.15rem;
+      font-weight: 800;
+      line-height: 1.35;
+      text-align: center;
+      background: #0b1220;
+      color: #cbd5e1;
+      border: 2px solid #334155;
+    }
+    .scan-status.ok { background: #166534; color: #fff; border-color: #4ade80; }
+    .scan-status.err { background: #991b1b; color: #fff; border-color: #fca5a5; }
+    #gunTrap, #manualSku { ime-mode: disabled; }
     .qty-box { display: flex; gap: 8px; align-items: stretch; margin-top: 10px; }
     .install-banner {
       display: none;
@@ -222,13 +261,14 @@
       <button type="button" id="btnInstallLater" class="secondary">稍后</button>
     </div>
   </div>
-  <div id="scanFlash" style="display:none;position:sticky;top:0;z-index:50;padding:14px 16px;font-size:1.15rem;font-weight:700;text-align:center;background:#166534;color:#fff"></div>
+  <div id="scanFlash" role="alert"></div>
   <header>
     <h1>富尔曼 · 扫码出库</h1>
     <span id="modeBadge" class="badge">连接中…</span>
   </header>
 
   <section class="panel">
+    <div id="scanStatus" class="scan-status" role="status" aria-live="assertive" data-state="idle">等待扫码。扫到后这里和页顶会变绿并扣库存；变红就是没扣成。</div>
     <div id="outBar">
       <div class="row">
         <button type="button" id="btnOut1" class="success">出库 1</button>
@@ -264,14 +304,15 @@
     </div>
 
     <!-- 隐藏焦点陷阱：扫码枪无需点击输入框也能输入 -->
-    <input id="gunTrap" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"
-      tabindex="0" aria-hidden="true"
-      style="position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;border:0;padding:0;margin:0;z-index:-1" />
+    <input id="gunTrap" type="text" lang="en" inputmode="latin" name="fuerman-gun"
+      autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+      tabindex="-1" aria-label="扫码枪输入"
+      style="position:fixed;left:0;bottom:0;width:24px;height:24px;opacity:0.02;border:0;padding:0;margin:0;z-index:2;color:transparent;background:transparent;caret-color:transparent" />
     <div class="manual">
-      <input id="manualSku" type="text" placeholder="扫码枪直接扫即可；也可手输条码/SKU 后回车" autocomplete="off" autocapitalize="off" spellcheck="false" />
+      <input id="manualSku" type="text" lang="en" inputmode="latin" placeholder="扫码枪直接扫即可；也可手输条码/SKU 后回车" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
       <button type="button" id="btnLookup" class="secondary">查询</button>
     </div>
-    <p class="hint" id="gunHint">电脑扫码枪：页面保持打开并置于前台，输入法切英文，无需点输入框，直接扫。扫到马上扣数量，页顶绿条立刻亮；如果随后变红，这一枪没有扣成。</p>
+    <p class="hint" id="gunHint">电脑扫码枪：页面在前台就直接扫，不用先点输入框。扫到后页顶和上面这块立刻变绿并扣 1；如果变红，这一枪没有扣成。</p>
     <p class="hint">大批量出库请用手输数量，不要连扫十几次。</p>
     <div id="demoChips" class="demo-list hidden"></div>
   </section>
@@ -360,7 +401,11 @@
       $("card").classList.remove("hidden");
       $("skuName").textContent = sku.name || "（无名称）";
       $("skuCode").textContent = sku.sku;
-      $("skuCurrent").textContent = Math.max(0, Number(sku.current) || 0);
+      const curNum = Number(sku.current);
+      const curShown = (sku.current !== "" && sku.current != null && Number.isFinite(curNum))
+        ? String(Math.max(0, curNum))
+        : (sku.current == null || sku.current === "" ? "—" : String(sku.current));
+      $("skuCurrent").textContent = curShown;
       $("skuSafety").textContent = sku.safety;
       $("skuSpec").textContent = sku.spec || "—";
       $("skuSize").textContent = sku.size || "—";
@@ -371,7 +416,7 @@
       st.className = "status " + statusClass(sku.status);
       // 不把编码写回输入框，避免下一枪追加拼接
       const hint = $("outSkuHint");
-      if (hint) hint.textContent = "当前：" + sku.sku + " · 库存 " + Math.max(0, Number(sku.current) || 0) + " " + (sku.unit || "条");
+      if (hint) hint.textContent = "当前：" + sku.sku + " · 库存 " + curShown + " " + (sku.unit || "条");
     }
 
     async function api(path, opts) {
@@ -454,6 +499,35 @@
       return true;
     }
 
+    function showPendingCard(code) {
+      if (paintFrom(code)) return;
+      renderSku({
+        sku: code,
+        name: "正在出库…",
+        spec: "—",
+        size: "—",
+        material: "—",
+        unit: "条",
+        current: "…",
+        safety: "—",
+        status: "正常",
+      });
+    }
+
+    function showFailedCard(code) {
+      renderSku({
+        sku: code,
+        name: "没有扣成",
+        spec: "—",
+        size: "—",
+        material: "—",
+        unit: "条",
+        current: "—",
+        safety: "—",
+        status: "正常",
+      });
+    }
+
     function inflightFor(code) {
       const snap = serverSnap.get(code);
       const keys = [code];
@@ -532,10 +606,11 @@
         const data = await enqueueSku(code, async () => {
           addInflight(code, qty);
           try {
-            const res = await api("/api/outbound", {
-              method: "POST",
-              body: JSON.stringify({ sku: code, qty, note: note || undefined }),
-            });
+          const res = await api("/api/outbound", {
+            method: "POST",
+            keepalive: true,
+            body: JSON.stringify({ sku: code, qty, note: note || undefined }),
+          });
             subInflight(code, qty);
             commitSnap(res.sku, code);
             return res;
@@ -596,7 +671,7 @@
       // 绿条和蜂鸣在请求发出前就响。同一 SKU 串行写，避免一次扫描扣两次。
       const gen = ++viewGen;
       addInflight(code, qty);
-      paintFrom(code);
+      showPendingCard(code);
       const remainNow = snap
         ? Math.max(0, (Number(snap.current) || 0) - inflightFor(code))
         : null;
@@ -609,6 +684,7 @@
         try {
           const data = await api("/api/outbound", {
             method: "POST",
+            keepalive: true,
             body: JSON.stringify({ sku: code, qty, note: note || undefined }),
           });
           subInflight(code, qty);
@@ -633,6 +709,7 @@
           }
           if (gen === viewGen) {
             if (serverSnap.has(code)) paintFrom(code);
+            else showFailedCard(code);
             showFlash(((e && e.message) || "出库失败") + "　扫到：" + code, true);
           }
           toast((e && e.message) || "出库失败", true);
@@ -816,10 +893,18 @@
       lookup(v);
     };
 
-    // 扫码枪（键盘楔入）：全局捕获，无需点击输入框；每扫一枪清空缓冲，防止号码拼接
+    // 扫码枪（键盘楔入）：全局捕获。中文输入法、无回车后缀、键码 Unidentified
+    // 的枪都不能把这一枪丢掉。缓冲按整段覆盖，两枪之间不拼接。
     let gunBuf = "";
-    let gunBufAt = 0;
-    const GUN_KEY_GAP_MS = 100; // 键间隔超过此值视为新一枪，丢弃旧缓冲
+    let gunTimes = [];
+    let idleTimer = 0;
+    let gunSync = false;
+    let keydownTook = false;
+    let steal = null;
+    const protectWatch = { buf: "", times: [], at: 0 };
+    const FAST_GAP_MS = 140;
+    const BOUNDARY_MS = 200;
+    const IDLE_COMMIT_MS = 180;
     function isGunProtectedTarget(tgt) {
       if (!tgt) return false;
       const id = tgt.id || "";
@@ -827,99 +912,279 @@
       if (tgt.tagName === "TEXTAREA") return true;
       return false;
     }
+    function isTerminator(e) {
+      if (!e) return false;
+      const key = e.key || "";
+      if (key === "Enter" || key === "Tab" || key === "|" || key === "NumpadEnter") return true;
+      const code = e.code || "";
+      if (code === "Enter" || code === "NumpadEnter" || code === "Tab") return true;
+      const which = e.keyCode || e.which || 0;
+      return which === 13 || which === 9;
+    }
+    function charFromEvent(e) {
+      if (!e || e.ctrlKey || e.metaKey || e.altKey) return "";
+      const key = e.key || "";
+      if (key.length === 1 && key !== "|") return key;
+      if (key.length >= 4 && key !== "Unidentified" && key !== "Process" && key !== "Dead") return key;
+      const which = e.keyCode || e.which || 0;
+      if (which >= 48 && which <= 57) return String.fromCharCode(which);
+      if (which >= 96 && which <= 105) return String(which - 96);
+      if (which >= 65 && which <= 90) return String.fromCharCode(which + (e.shiftKey ? 0 : 32));
+      if (which === 189 || which === 109 || which === 173) return "-";
+      if (which === 190 || which === 110) return ".";
+      if (which === 191) return "/";
+      return "";
+    }
+    function burstIsFast() {
+      if (gunBuf.length < 4) return false;
+      if (gunTimes.length <= 1) return true;
+      let maxGap = 0;
+      for (let i = 1; i < gunTimes.length; i++) maxGap = Math.max(maxGap, gunTimes[i] - gunTimes[i - 1]);
+      return maxGap <= FAST_GAP_MS;
+    }
+    function mirrorGun() {
+      gunSync = true;
+      const a = $("manualSku");
+      const b = $("gunTrap");
+      if (a && a.value !== gunBuf) a.value = gunBuf;
+      if (b && b.value !== gunBuf) b.value = gunBuf;
+      gunSync = false;
+    }
     function clearGunUi() {
       gunBuf = "";
-      gunBufAt = 0;
+      gunTimes = [];
+      clearTimeout(idleTimer);
       const a = $("manualSku");
       const b = $("gunTrap");
       if (a) a.value = "";
       if (b) b.value = "";
     }
     function focusGunInput() {
-      // 优先隐藏陷阱，保证未点输入框也能收枪；手输时用户会主动点 manualSku
       const el = $("gunTrap") || $("manualSku");
       if (!el) return;
       try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (__) {} }
     }
     function showFlash(msg, isErr) {
       const el = $("scanFlash");
-      if (!el) return;
-      el.style.display = "block";
-      el.style.background = isErr ? "#991b1b" : "#166534";
-      el.textContent = msg;
-      clearTimeout(el._t);
-      el._t = setTimeout(() => { el.style.display = "none"; }, 3500);
+      const status = $("scanStatus");
+      if (el) {
+        el.textContent = msg;
+        el.classList.toggle("err", !!isErr);
+        el.classList.add("show");
+        void el.offsetHeight;
+        clearTimeout(el._t);
+        el._t = setTimeout(() => { el.classList.remove("show"); }, isErr ? 8000 : 6500);
+      }
+      if (status) {
+        status.textContent = msg;
+        status.classList.toggle("ok", !isErr);
+        status.classList.toggle("err", !!isErr);
+        status.dataset.state = isErr ? "err" : "ok";
+      }
     }
     function fireGunScan(code) {
-      // 先清空 UI，再查库；即使 API 慢/失败，输入框也不会残留旧码
+      clearTimeout(idleTimer);
       clearGunUi();
-      let c = (code || "").replace(/[|]+/g, "").trim();
-      c = normalizeSkuCode(c);
+      const c = normalizeSkuCode(String(code || "").replace(/[|]+/g, ""));
       if (!c) return;
       onScanSuccess(c, { fromGun: true });
       setTimeout(focusGunInput, 30);
-      setTimeout(focusGunInput, 200);
-      setTimeout(clearGunUi, 250); // 查询/出库异步完成后再次清空，防 render 竞态
+      setTimeout(focusGunInput, 220);
+    }
+    function scheduleIdle() {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (burstIsFast()) commitGunBuf();
+      }, IDLE_COMMIT_MS);
+    }
+    function replaceGunText(text) {
+      const v = String(text || "").replace(/[|\r\n]+$/g, "");
+      if (v === gunBuf) {
+        scheduleIdle();
+        return;
+      }
+      // Keep per-key gaps when the field just grew. A brand-new chunk
+      // (paste or IME commit) is one burst and may commit on idle.
+      const extended = !!(gunBuf && v.startsWith(gunBuf));
+      gunBuf = v;
+      if (extended) gunTimes.push(Date.now());
+      else gunTimes = [Date.now()];
+      mirrorGun();
+      scheduleIdle();
     }
     function appendGunChar(ch) {
-      if (ch === "|") return; // 终止符不进缓冲
+      if (!ch || ch === "|") return;
+      if (ch.length > 1) {
+        replaceGunText(ch);
+        return;
+      }
       const now = Date.now();
-      // 键间隔 >100ms：丢弃旧缓冲，只保留本枪突发
-      if (!gunBufAt || (now - gunBufAt > GUN_KEY_GAP_MS)) gunBuf = "";
-      gunBufAt = now;
+      const gap = gunTimes.length ? now - gunTimes[gunTimes.length - 1] : 0;
+      const manual = document.activeElement && document.activeElement.id === "manualSku";
+      if (gunBuf && gap > BOUNDARY_MS && burstIsFast()) {
+        const prev = gunBuf;
+        gunBuf = "";
+        gunTimes = [];
+        fireGunScan(prev);
+      } else if (gunBuf && gap > 900 && !manual) {
+        gunBuf = "";
+        gunTimes = [];
+      }
       gunBuf += ch;
-      const el = $("manualSku");
-      if (el) el.value = gunBuf; // 整框覆盖，绝不在旧 value 后拼接
-      const trap = $("gunTrap");
-      if (trap) trap.value = gunBuf;
+      gunTimes.push(now);
+      mirrorGun();
+      scheduleIdle();
     }
     function commitGunBuf() {
-      // 优先用本枪缓冲；若缓冲空才读输入框（手输回车）
+      clearTimeout(idleTimer);
       const typed = (($("manualSku") && $("manualSku").value) || "").trim();
       const trap = (($("gunTrap") && $("gunTrap").value) || "").trim();
       let code = (gunBuf || typed || trap || "").trim();
-      code = code.replace(/[|]+$/g, "");
+      code = code.replace(/[|\r\n]+$/g, "").replace(/^[|]+|[|]+$/g, "");
       clearGunUi();
+      if (!code) return;
       fireGunScan(code);
     }
-    // 捕获阶段拦键盘：页面任意焦点（除备注/数量）都能收枪；绕过 IME
+    function finishSteal() {
+      if (!steal) return;
+      clearTimeout(steal.timer);
+      const code = steal.buf;
+      steal = null;
+      if (code) fireGunScan(code);
+    }
+    function watchProtected(e) {
+      if (e.isComposing || e.keyCode === 229 || e.key === "Process") return;
+      const ch = charFromEvent(e);
+      if (!ch || ch.length !== 1) return;
+      const now = Date.now();
+      if (!protectWatch.buf || now - protectWatch.at > 200) {
+        protectWatch.buf = "";
+        protectWatch.times = [];
+      }
+      protectWatch.buf += ch;
+      protectWatch.times.push(now);
+      protectWatch.at = now;
+      if (protectWatch.buf.length < 4) return;
+      let maxGap = 0;
+      for (let i = 1; i < protectWatch.times.length; i++) {
+        maxGap = Math.max(maxGap, protectWatch.times[i] - protectWatch.times[i - 1]);
+      }
+      if (maxGap > 80) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const field = e.target;
+      const stolen = protectWatch.buf;
+      protectWatch.buf = "";
+      protectWatch.times = [];
+      const strip = () => {
+        if (!field) return;
+        const v = String(field.value || "");
+        if (v.endsWith(stolen)) field.value = v.slice(0, v.length - stolen.length);
+        else if (stolen.length > 1 && v.endsWith(stolen.slice(0, -1))) field.value = v.slice(0, v.length - (stolen.length - 1));
+        if (field.id === "qtyInput" && !parseInt(field.value, 10)) field.value = "1";
+      };
+      strip();
+      setTimeout(strip, 0);
+      steal = { buf: stolen, timer: 0 };
+      steal.timer = setTimeout(finishSteal, IDLE_COMMIT_MS);
+    }
     document.addEventListener("keydown", (e) => {
-      if (isGunProtectedTarget(e.target)) return;
-      if (e.isComposing || e.keyCode === 229) {
-        e.preventDefault();
-        clearGunUi();
-        showFlash("请切换到英文输入法后再扫码枪", true);
+      keydownTook = false;
+      if (steal) {
+        if (isTerminator(e)) {
+          e.preventDefault();
+          e.stopPropagation();
+          keydownTook = true;
+          finishSteal();
+          return;
+        }
+        const extra = charFromEvent(e);
+        if (extra && extra.length === 1 && !e.isComposing && e.keyCode !== 229 && e.key !== "Process") {
+          e.preventDefault();
+          e.stopPropagation();
+          keydownTook = true;
+          steal.buf += extra;
+          clearTimeout(steal.timer);
+          steal.timer = setTimeout(finishSteal, IDLE_COMMIT_MS);
+          return;
+        }
+      }
+      if (isGunProtectedTarget(e.target)) {
+        watchProtected(e);
         return;
       }
-      // Enter / Tab / | 都视为一枪结束（得力等枪可能用 | 作后缀）
-      if (e.key === "Enter" || e.key === "Tab" || e.key === "|") {
+      // 229 / 组合中：不要清缓冲，也不要拦住输入法把字送进输入框。
+      if (e.isComposing || e.keyCode === 229 || e.key === "Process") return;
+      if (isTerminator(e)) {
         const has = !!(gunBuf || ($("manualSku") && $("manualSku").value) || ($("gunTrap") && $("gunTrap").value));
         e.preventDefault();
         e.stopPropagation();
+        keydownTook = true;
         if (has) commitGunBuf();
         else clearGunUi();
         return;
       }
       if (e.key === "Escape") {
         e.preventDefault();
+        keydownTook = true;
         clearGunUi();
         return;
       }
       if (e.key === "Backspace") {
         if (gunBuf) {
           e.preventDefault();
+          keydownTook = true;
           gunBuf = gunBuf.slice(0, -1);
-          gunBufAt = Date.now();
-          if ($("manualSku")) $("manualSku").value = gunBuf;
+          gunTimes.push(Date.now());
+          mirrorGun();
         }
         return;
       }
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        e.stopPropagation();
-        // | 已在上面当终止符；其它字符进缓冲
-        appendGunChar(e.key);
+      const ch = charFromEvent(e);
+      if (!ch) return;
+      e.preventDefault();
+      e.stopPropagation();
+      keydownTook = true;
+      appendGunChar(ch);
+    }, true);
+    document.addEventListener("keypress", (e) => {
+      if (keydownTook || steal || isGunProtectedTarget(e.target)) return;
+      if (e.isComposing || e.keyCode === 229) return;
+      const ch = charFromEvent(e);
+      if (!ch || ch.length !== 1) return;
+      e.preventDefault();
+      appendGunChar(ch);
+    }, true);
+    function onScanFieldInput(e) {
+      if (gunSync) return;
+      const t = e.target;
+      if (!t) return;
+      if (t.id === "gunTrap" || t.id === "manualSku") {
+        const raw = String(t.value || "");
+        if (/[|\r\n]$/.test(raw)) {
+          replaceGunText(raw);
+          commitGunBuf();
+          return;
+        }
+        replaceGunText(raw);
+        return;
       }
+      if (!isGunProtectedTarget(t) || steal) return;
+      const added = e.data ? String(e.data) : "";
+      if (added.length >= 6 && /^[0-9A-Za-z._\-]+$/.test(added)) {
+        const v = String(t.value || "");
+        if (v.endsWith(added)) t.value = v.slice(0, v.length - added.length);
+        if (t.id === "qtyInput" && !parseInt(t.value, 10)) t.value = "1";
+        fireGunScan(added);
+      }
+    }
+    document.addEventListener("input", onScanFieldInput, true);
+    document.addEventListener("compositionend", (e) => {
+      if (isGunProtectedTarget(e.target)) return;
+      const text = String((e.data || (e.target && e.target.value) || "")).trim();
+      if (!text) return;
+      replaceGunText(text);
+      if (text.replace(/[|\r\n]/g, "").trim().length >= 4) commitGunBuf();
     }, true);
     // 空白处点击 / 窗口重新聚焦 → 拉回枪焦点
     document.addEventListener("click", (e) => {
@@ -935,6 +1200,15 @@
       if (!document.hidden) setTimeout(focusGunInput, 50);
     });
     focusGunInput();
+    setInterval(() => {
+      if (document.hidden || !document.hasFocus()) return;
+      const a = document.activeElement;
+      if (!a || a === document.body) { focusGunInput(); return; }
+      const id = a.id || "";
+      if (id === "manualSku" || id === "noteInput" || id === "qtyInput" || id === "gunTrap") return;
+      if (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable) return;
+      focusGunInput();
+    }, 700);
     $("btnOut1").onclick = () => outbound(1);
     $("btnOutQty").onclick = () => outbound($("qtyInput").value);
     $("btnMinus").onclick = () => { const v = Math.max(1, (parseInt($("qtyInput").value, 10) || 1) - 1); $("qtyInput").value = v; };
@@ -997,7 +1271,24 @@
     }
 
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {});
+      // First install just claims the page. A later worker (after this fix
+      // ships) reloads once so an already-open tab picks up the new scan code.
+      let hadController = !!navigator.serviceWorker.controller;
+      if (sessionStorage.getItem("fuerman-sw-reloaded") === "1") {
+        sessionStorage.removeItem("fuerman-sw-reloaded");
+      }
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (!hadController) {
+          hadController = true;
+          return;
+        }
+        if (sessionStorage.getItem("fuerman-sw-reloaded") === "1") return;
+        sessionStorage.setItem("fuerman-sw-reloaded", "1");
+        location.reload();
+      });
+      navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((reg) => {
+        reg.update().catch(() => {});
+      }).catch(() => {});
     }
 
 

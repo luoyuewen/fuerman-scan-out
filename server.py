@@ -771,8 +771,14 @@ async def apple_touch_icon():
 
 
 @app.get("/")
+@app.get("/index.html")
 async def index():
-    return FileResponse(ROOT / "index.html")
+    # no-cache: browsers were free to reuse a stale page (no Cache-Control
+    # before), so a warehouse tab could keep running JS from before a fix.
+    return FileResponse(
+        ROOT / "index.html",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 # Static QR preview images (optional)
