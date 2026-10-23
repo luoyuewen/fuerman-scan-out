@@ -221,6 +221,7 @@
       <button type="button" id="btnInstallLater" class="secondary">稍后</button>
     </div>
   </div>
+  <div id="scanFlash" style="display:none;position:sticky;top:0;z-index:50;padding:14px 16px;font-size:1.15rem;font-weight:700;text-align:center;background:#166534;color:#fff"></div>
   <header>
     <h1>富尔曼 · 扫码出库</h1>
     <span id="modeBadge" class="badge">连接中…</span>
@@ -262,9 +263,10 @@
     </div>
 
     <div class="manual">
-      <input id="manualSku" type="text" placeholder="扫码枪对准扫，或手输 SKU 后回车" autocomplete="off" autocapitalize="characters" />
+      <input id="manualSku" type="text" placeholder="扫码枪点这里再扫，或手输 SKU 后回车" autocomplete="off" autocapitalize="characters" />
       <button type="button" id="btnLookup" class="secondary">查询</button>
     </div>
+    <p class="hint" id="gunHint">电脑扫码枪：先用鼠标点一下上方输入框（框会亮起），再扫。枪自己响不等于已出库；看本页绿色成功条和「当前库存」。</p>
     <p class="hint">大批量出库请用手输数量，不要连扫十几次。</p>
     <div id="demoChips" class="demo-list hidden"></div>
   </section>
@@ -426,23 +428,32 @@
         });
         renderSku(data.sku);
         $("lastOrder").textContent = "最近出库单：" + data.order_no + " × " + data.qty;
-        toast((data.message || "出库成功") + "，剩余 " + data.sku.current);
+        const remain = data.sku && data.sku.current;
+        const okMsg = (data.message || "出库成功") + "，剩余 " + remain;
+        toast(okMsg);
+        showFlash("出库成功 ×" + data.qty + "　" + (data.sku && data.sku.sku ? data.sku.sku : "") + "　剩余 " + remain, false);
         beep(true);
+        focusGunInput();
         $("qtyInput").value = 1;
       } catch (e) {
         toast(e.message || "出库失败", true);
+        showFlash(e.message || "出库失败", true);
         beep(false);
+        focusGunInput();
       } finally {
         $("btnOut1").disabled = false;
         $("btnOutQty").disabled = false;
       }
     }
 
-    function onScanSuccess(decodedText) {
+    function onScanSuccess(decodedText, opts) {
+      opts = opts || {};
       const now = Date.now();
       const code = (decodedText || "").trim();
       if (!code) return;
-      if (code === lastScanCode && now - lastScanAt < 2500) return;
+      // 相机连扫防抖 2.5 秒；扫码枪同码防抖 0.45 秒（可连扫同一 SKU）
+      const gap = opts.fromGun ? 450 : 2500;
+      if (code === lastScanCode && now - lastScanAt < gap) return;
       lastScanCode = code;
       lastScanAt = now;
       lookup(code, true).then((ok) => { if (ok) outbound(1); });
@@ -617,11 +628,26 @@
     // 扫码枪（键盘楔入）：扫到 SKU 后回车 → 与摄像头一样自动出库 1
     let gunBuf = "";
     let gunBufAt = 0;
+    function focusGunInput() {
+      const el = $("manualSku");
+      if (!el) return;
+      try { el.focus({ preventScroll: false }); } catch (_) { el.focus(); }
+    }
+    function showFlash(msg, isErr) {
+      const el = $("scanFlash");
+      if (!el) return;
+      el.style.display = "block";
+      el.style.background = isErr ? "#991b1b" : "#166534";
+      el.textContent = msg;
+      clearTimeout(el._t);
+      el._t = setTimeout(() => { el.style.display = "none"; }, 3500);
+    }
     function fireGunScan(code) {
       const c = (code || "").trim();
       if (!c) return;
       $("manualSku").value = c;
-      onScanSuccess(c);
+      onScanSuccess(c, { fromGun: true });
+      setTimeout(focusGunInput, 50);
     }
     $("manualSku").addEventListener("keydown", (e) => {
       if (e.key !== "Enter") return;
@@ -631,12 +657,10 @@
       fireGunScan(code);
     });
     document.addEventListener("keydown", (e) => {
-      const t = e.target;
-      const id = (t && t.id) || "";
-      const tag = (t && t.tagName) || "";
-      // 备注、数量框里正常打字，不抢扫码枪
+      const tgt = e.target;
+      const id = (tgt && tgt.id) || "";
+      const tag = (tgt && tgt.tagName) || "";
       if (id === "noteInput" || id === "qtyInput") return;
-      // 手动 SKU 框由上面的监听处理
       if (id === "manualSku") return;
       if (tag === "TEXTAREA") return;
       if (e.key === "Enter") {
@@ -654,6 +678,14 @@
         gunBuf += e.key;
       }
     });
+    // 页面点空白处时把焦点拉回扫码框，方便枪输入
+    document.addEventListener("click", (e) => {
+      const id = (e.target && e.target.id) || "";
+      if (id === "noteInput" || id === "qtyInput" || id === "manualSku") return;
+      if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "BUTTON" || e.target.tagName === "A")) return;
+      focusGunInput();
+    });
+    focusGunInput();
     $("btnOut1").onclick = () => outbound(1);
     $("btnOutQty").onclick = () => outbound($("qtyInput").value);
     $("btnMinus").onclick = () => { const v = Math.max(1, (parseInt($("qtyInput").value, 10) || 1) - 1); $("qtyInput").value = v; };
