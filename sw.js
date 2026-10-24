@@ -1,4 +1,4 @@
-const CACHE = 'fuerman-scan-v11';
+const CACHE = 'fuerman-scan-v12';
 const ASSETS = ['/', '/manifest.webmanifest', '/favicon.ico', '/icon-192.png', '/icon-512.png', '/apple-touch-icon.png'];
 
 async function precache() {
