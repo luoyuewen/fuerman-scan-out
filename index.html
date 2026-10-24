@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="扫码出库" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="scan-build" content="11" />
+  <meta name="scan-build" content="12" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=10" />
   <link rel="icon" href="/favicon.ico?v=10" sizes="any" />
@@ -39,6 +39,11 @@
       min-height: 100dvh;
       padding: 12px;
       padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    }
+    /* Phone: keep outbound controls at the top and pin the camera + note to the bottom. */
+    @media (max-width: 800px) {
+      body { display: flex; flex-direction: column; }
+      #bottomStack { margin-top: auto; width: 100%; }
     }
     header {
       display: flex;
@@ -74,6 +79,7 @@
       border-radius: 12px;
       background: #000;
       min-height: 220px;
+      margin-top: 10px;
     }
     #reader video { border-radius: 12px; }
     .row {
@@ -267,8 +273,8 @@
     <span id="modeBadge" class="badge">连接中…</span>
   </header>
 
-  <section class="panel">
-    <div id="scanStatus" class="scan-status" role="status" aria-live="assertive" data-state="idle">等待扫码。扫到后这里和页顶会变绿并扣库存；变红就是没扣成。</div>
+  <section class="panel" id="topPanel">
+    <div id="scanStatus" class="scan-status" role="status" aria-live="assertive" data-state="unarmed">按一次回车开始扫码，不用先点查询框。</div>
     <div id="outBar">
       <div class="row">
         <button type="button" id="btnOut1" class="success">出库 1</button>
@@ -281,40 +287,27 @@
         <button type="button" id="btnOutQty" class="accent">按数量出库</button>
       </div>
       <p class="hint" id="outSkuHint" style="margin-top:8px">先扫码或查询 SKU，再出库。</p>
-      <label style="margin-top:10px">备注（可选）</label>
-      <input id="noteInput" type="text" placeholder="例如：门店取货 / 快递出库" />
       <p class="hint" id="lastOrder"></p>
     </div>
-    <hr style="border:none;border-top:1px solid var(--line);margin:14px 0" />
 
-    <!-- 飞书内：大按钮调原生扫一扫 -->
-    <div id="feishuScanBox" class="hidden">
-      <button type="button" id="btnFeishuScan" class="feishu-scan">扫码出库</button>
-      <p class="hint">在飞书内打开本页，点上方按钮调用飞书「扫一扫」。扫到的内容应为 SKU 编码。</p>
-    </div>
-
-    <!-- 浏览器兜底：html5-qrcode 相机 -->
-    <div id="browserScanBox">
-      <div id="reader"></div>
-      <div class="row">
-        <button type="button" id="btnStart" class="accent">打开相机扫码</button>
-        <button type="button" id="btnStop" class="secondary hidden">停止扫码</button>
-      </div>
-      <p class="hint" id="browserHint">手机浏览器需 HTTPS 才能开相机；建议在飞书工作台打开本应用。</p>
-    </div>
-
-    <!-- 隐藏焦点陷阱：扫码枪无需点击输入框也能输入 -->
+    <!-- 隐藏焦点陷阱：桌面枪的备用落点。手机必须把可见查询框聚焦后枪才进得来。 -->
     <input id="gunTrap" type="text" lang="en" inputmode="latin" name="fuerman-gun"
       autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
       tabindex="-1" aria-label="扫码枪输入"
       style="position:fixed;left:0;bottom:0;width:24px;height:24px;opacity:0.02;border:0;padding:0;margin:0;z-index:2;color:transparent;background:transparent;caret-color:transparent" />
     <div class="manual">
-      <input id="manualSku" type="text" lang="en" inputmode="latin" placeholder="扫码枪直接扫即可；也可手输条码/SKU 后回车" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+      <input id="manualSku" type="text" lang="en" inputmode="latin" enterkeyhint="done" placeholder="扫码枪直接扫即可；也可手输条码/SKU 后回车" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
       <button type="button" id="btnLookup" class="secondary">查询</button>
     </div>
-    <p class="hint" id="gunHint">电脑扫码枪：页面在前台就直接扫，不用先点输入框。扫到后页顶和上面这块立刻变绿并扣 1；如果变红，这一枪没有扣成。</p>
+    <p class="hint" id="gunHint">电脑扫码枪：页面在前台就直接扫。手机刚打开或亮屏后，按一次回车再扫，不用点查询框。扫到后页顶和上面这块变绿并扣 1；变红就是没扣成。</p>
     <p class="hint">大批量出库请用手输数量，不要连扫十几次。</p>
     <div id="demoChips" class="demo-list hidden"></div>
+
+    <!-- 飞书内：大按钮调原生扫一扫。相机框在页面底部，这个按钮留在出库操作下面。 -->
+    <div id="feishuScanBox" class="hidden">
+      <button type="button" id="btnFeishuScan" class="feishu-scan">扫码出库</button>
+      <p class="hint">在飞书内打开本页，点上方按钮调用飞书「扫一扫」。扫到的内容应为 SKU 编码。</p>
+    </div>
   </section>
 
   <section id="card" class="panel hidden">
@@ -340,6 +333,24 @@
     </div>
 
   </section>
+
+  <div id="bottomStack">
+    <!-- 浏览器兜底：html5-qrcode 相机。手机上放在出库操作下面、备注上面。 -->
+    <section class="panel" id="cameraPanel">
+      <div id="browserScanBox">
+        <div class="row" style="margin-top:0">
+          <button type="button" id="btnStart" class="accent">打开相机扫码</button>
+          <button type="button" id="btnStop" class="secondary hidden">停止扫码</button>
+        </div>
+        <p class="hint" id="browserHint">手机浏览器需 HTTPS 才能开相机；建议在飞书工作台打开本应用。</p>
+        <div id="reader"></div>
+      </div>
+    </section>
+    <section class="panel" id="notePanel">
+      <label for="noteInput">备注（可选）</label>
+      <input id="noteInput" type="text" enterkeyhint="done" placeholder="例如：门店取货 / 快递出库" autocomplete="off" />
+    </section>
+  </div>
 
   <div id="toast" class="toast"></div>
 
@@ -845,11 +856,13 @@
       if (inFeishu) {
         $("feishuScanBox").classList.remove("hidden");
         $("browserScanBox").classList.add("hidden");
+        if ($("cameraPanel")) $("cameraPanel").classList.add("hidden");
         // 预鉴权，减少第一次扫码等待
         ensureFeishuConfig().catch(() => {});
       } else {
         $("feishuScanBox").classList.add("hidden");
         $("browserScanBox").classList.remove("hidden");
+        if ($("cameraPanel")) $("cameraPanel").classList.remove("hidden");
       }
     }
 
@@ -901,6 +914,16 @@
     let gunSync = false;
     let keydownTook = false;
     let steal = null;
+    // Phones ignore focus() that is not inside a tap or key. scanArmed is set
+    // only from that gesture so a lone Enter can take the place of tapping 查询.
+    const PHONE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent || "");
+    const IDLE_STATUS = "等待扫码。扫到后这里和页顶会变绿并扣库存；变红就是没扣成。";
+    const UNARMED_STATUS = "按一次回车开始扫码，不用先点查询框。";
+    let scanArmed = false;
+    let manualEditing = false;
+    let armingFocus = false;
+    let focusToken = 0;
+    let sawHide = false;
     const protectWatch = { buf: "", times: [], at: 0 };
     const FAST_GAP_MS = 140;
     const BOUNDARY_MS = 200;
@@ -959,10 +982,96 @@
       if (a) a.value = "";
       if (b) b.value = "";
     }
-    function focusGunInput() {
-      const el = $("gunTrap") || $("manualSku");
+    function isScanField(el) {
+      if (!el) return false;
+      const id = el.id || "";
+      return id === "manualSku" || id === "gunTrap";
+    }
+    function scanFieldFocused() {
+      return isScanField(document.activeElement);
+    }
+    function scanBufferHasText() {
+      return !!(gunBuf || ($("manualSku") && $("manualSku").value) || ($("gunTrap") && $("gunTrap").value));
+    }
+    function paintArmState() {
+      document.documentElement.dataset.scanArmed = scanArmed ? "1" : "0";
+      const status = $("scanStatus");
+      if (!status) return;
+      const st = status.dataset.state;
+      if (st === "ok" || st === "err") return;
+      if (isGunProtectedTarget(document.activeElement)) return;
+      const ready = PHONE ? scanArmed : scanFieldFocused();
+      if (ready) {
+        if (st !== "idle") {
+          status.dataset.state = "idle";
+          status.classList.remove("ok", "err");
+          status.textContent = IDLE_STATUS;
+        }
+      } else if (st === "idle" || st === "unarmed" || !st) {
+        status.dataset.state = "unarmed";
+        status.classList.remove("ok", "err");
+        status.textContent = UNARMED_STATUS;
+      }
+    }
+    function focusGunInput(opts) {
+      // Visible 查询 box, not the hidden trap. After launch or wake, iOS/Android
+      // drop wedge keys until a real user gesture focuses that field.
+      const gesture = !!(opts && opts.gesture);
+      const el = $("manualSku") || $("gunTrap");
       if (!el) return;
+      if (gesture) manualEditing = false;
+      const already = document.activeElement === el;
+      if (already && !gesture) {
+        if (!PHONE) scanArmed = true;
+        paintArmState();
+        return;
+      }
+      armingFocus = true;
+      // readOnly + inputmode=none only while focusing, so a gun-arm does not pop
+      // the soft keyboard. A tap on the field clears both and types normally.
+      if (!already && !manualEditing) {
+        el.readOnly = true;
+        el.setAttribute("inputmode", "none");
+      }
       try { el.focus({ preventScroll: true }); } catch (_) { try { el.focus(); } catch (__) {} }
+      armingFocus = false;
+      if (el.readOnly || el.getAttribute("inputmode") === "none") {
+        const token = ++focusToken;
+        setTimeout(() => {
+          if (token !== focusToken) return;
+          el.readOnly = false;
+          el.setAttribute("inputmode", "latin");
+        }, 80);
+      }
+      if (document.activeElement === el && (gesture || !PHONE)) scanArmed = true;
+      paintArmState();
+    }
+    function onPageHide() {
+      sawHide = true;
+      scanArmed = false;
+      manualEditing = false;
+    }
+    function onPageWake() {
+      scanArmed = false;
+      manualEditing = false;
+      if (PHONE) {
+        const status = $("scanStatus");
+        if (status) {
+          status.classList.remove("ok", "err");
+          status.dataset.state = "unarmed";
+        }
+      }
+      setTimeout(() => { focusGunInput(); paintArmState(); }, 60);
+    }
+    function clickKeepsFocus(target) {
+      if (!target) return false;
+      if (isGunProtectedTarget(target)) return true;
+      const label = target.tagName === "LABEL" ? target : (target.closest ? target.closest("label") : null);
+      if (!label) return false;
+      const id = label.getAttribute("for") || "";
+      if (id === "noteInput" || id === "qtyInput") return true;
+      const inner = label.querySelector && label.querySelector("input, textarea, select");
+      return !!(inner && isGunProtectedTarget(inner));
     }
     function showFlash(msg, isErr) {
       const el = $("scanFlash");
@@ -1020,7 +1129,7 @@
       }
       const now = Date.now();
       const gap = gunTimes.length ? now - gunTimes[gunTimes.length - 1] : 0;
-      const manual = document.activeElement && document.activeElement.id === "manualSku";
+      const manual = manualEditing;
       if (gunBuf && gap > BOUNDARY_MS && burstIsFast()) {
         const prev = gunBuf;
         gunBuf = "";
@@ -1096,6 +1205,7 @@
           e.stopPropagation();
           keydownTook = true;
           finishSteal();
+          focusGunInput({ gesture: true });
           return;
         }
         const extra = charFromEvent(e);
@@ -1114,14 +1224,20 @@
         return;
       }
       // 229 / 组合中：不要清缓冲，也不要拦住输入法把字送进输入框。
-      if (e.isComposing || e.keyCode === 229 || e.key === "Process") return;
+      // 查询框还没拿到手势焦点时，回车本身就是那一下手势。
+      if (e.isComposing || e.keyCode === 229 || e.key === "Process") {
+        if (!scanFieldFocused() && isTerminator(e) && !scanBufferHasText()) focusGunInput({ gesture: true });
+        return;
+      }
       if (isTerminator(e)) {
-        const has = !!(gunBuf || ($("manualSku") && $("manualSku").value) || ($("gunTrap") && $("gunTrap").value));
+        const has = scanBufferHasText();
         e.preventDefault();
         e.stopPropagation();
         keydownTook = true;
         if (has) commitGunBuf();
-        else clearGunUi();
+        // Lone Enter (hardware gun or soft keyboard) arms the scan field
+        // so the next barcode does not need a tap on 查询 first.
+        if (!(manualEditing && scanFieldFocused())) focusGunInput({ gesture: true });
         return;
       }
       if (e.key === "Escape") {
@@ -1148,12 +1264,35 @@
       appendGunChar(ch);
     }, true);
     document.addEventListener("keypress", (e) => {
-      if (keydownTook || steal || isGunProtectedTarget(e.target)) return;
+      if (steal || isGunProtectedTarget(e.target)) return;
+      // Some phone webviews only surface the gun's Enter on keypress.
+      if (!keydownTook && isTerminator(e) && !scanBufferHasText()) {
+        e.preventDefault();
+        if (!(manualEditing && scanFieldFocused())) focusGunInput({ gesture: true });
+        return;
+      }
+      if (keydownTook) return;
       if (e.isComposing || e.keyCode === 229) return;
       const ch = charFromEvent(e);
       if (!ch || ch.length !== 1) return;
       e.preventDefault();
       appendGunChar(ch);
+    }, true);
+    document.addEventListener("keyup", (e) => {
+      if (steal || isGunProtectedTarget(e.target)) return;
+      if (!isTerminator(e) || scanBufferHasText()) return;
+      if (manualEditing && scanFieldFocused()) return;
+      if (scanArmed && scanFieldFocused()) return;
+      focusGunInput({ gesture: true });
+    }, true);
+    document.addEventListener("beforeinput", (e) => {
+      if (isGunProtectedTarget(e.target)) return;
+      const kind = e.inputType || "";
+      if (kind !== "insertParagraph" && kind !== "insertLineBreak") return;
+      if (scanBufferHasText()) return;
+      if (manualEditing && scanFieldFocused()) return;
+      e.preventDefault();
+      focusGunInput({ gesture: true });
     }, true);
     function onScanFieldInput(e) {
       if (gunSync) return;
@@ -1186,20 +1325,45 @@
       replaceGunText(text);
       if (text.replace(/[|\r\n]/g, "").trim().length >= 4) commitGunBuf();
     }, true);
-    // 空白处点击 / 窗口重新聚焦 → 拉回枪焦点
+    const skuInput = $("manualSku");
+    if (skuInput) {
+      skuInput.addEventListener("pointerdown", () => {
+        skuInput.readOnly = false;
+        skuInput.setAttribute("inputmode", "latin");
+        manualEditing = true;
+      }, true);
+      skuInput.addEventListener("focus", () => {
+        if (armingFocus) return;
+        manualEditing = true;
+        scanArmed = true;
+        paintArmState();
+      });
+      skuInput.addEventListener("blur", () => {
+        setTimeout(() => {
+          if (!scanFieldFocused()) {
+            scanArmed = false;
+            paintArmState();
+          }
+        }, 30);
+      });
+    }
+    // 空白处点击必须在这次点击的调用栈里聚焦，setTimeout 在手机上不算用户手势。
     document.addEventListener("click", (e) => {
-      if (isGunProtectedTarget(e.target)) return;
+      if (clickKeepsFocus(e.target)) return;
       const id = (e.target && e.target.id) || "";
       if (id === "manualSku" || id === "gunTrap") return;
       if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT")) return;
-      // 按钮点完后把焦点要回来，方便连扫
-      setTimeout(focusGunInput, 0);
+      focusGunInput({ gesture: true });
     });
-    window.addEventListener("focus", () => setTimeout(focusGunInput, 0));
+    window.addEventListener("blur", () => { if (PHONE) scanArmed = false; });
+    window.addEventListener("focus", () => setTimeout(() => { focusGunInput(); paintArmState(); }, 0));
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) setTimeout(focusGunInput, 50);
+      if (document.hidden) onPageHide();
+      else if (sawHide) onPageWake();
     });
+    window.addEventListener("pageshow", (e) => { if (e.persisted) onPageWake(); });
     focusGunInput();
+    paintArmState();
     setInterval(() => {
       if (document.hidden || !document.hasFocus()) return;
       const a = document.activeElement;
